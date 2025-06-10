@@ -9,6 +9,12 @@ class GameDashboard {
     this.soundEnabled = true
     this.gameViewEnabled = false
     this.currentScoreFilter = "all"
+    this.ws = null
+    this.wsReconnectAttempts = 0
+    this.maxReconnectAttempts = 5
+    this.user = null
+    this.isAuthenticated = false
+    this.authToken = null
 
     this.gameData = {
       ufoScore: 0,
@@ -26,6 +32,43 @@ class GameDashboard {
 
     this.highScores = []
     this.gameHistory = []
+    this.userSettings = {}
+
+    this.analytics = {
+      sessionStats: {},
+      gameStats: {
+        ufo: {
+          totalGames: 0,
+          totalScore: 0,
+          highScore: 0,
+          averageScore: 0,
+          totalPlayTime: 0,
+          killsByLevel: {},
+          deathsByLevel: {},
+          accuracy: 0,
+          powerupsCollected: 0
+        },
+        snake: {
+          totalGames: 0,
+          totalScore: 0,
+          highScore: 0,
+          averageScore: 0,
+          totalPlayTime: 0,
+          maxLength: 0,
+          foodCollected: 0,
+          averageLength: 0
+        }
+      },
+      performance: {
+        fps: [],
+        latency: [],
+        memoryUsage: []
+      }
+    }
+
+    this.savedGames = {}
+    this.autoSaveInterval = null
+    this.autoSaveEnabled = true
 
     this.init()
   }
@@ -34,8 +77,11 @@ class GameDashboard {
     this.loadSettings()
     this.setupEventListeners()
     this.initializeCharts()
-    this.startDataRefresh()
+    this.initializeWebSocket()
     this.checkConnection()
+    this.checkAuth()
+    this.loadSavedGames()
+    this.setupAutoSave()
 
     // Initialize UI
     this.updateRefreshRateDisplay()
@@ -79,6 +125,84 @@ class GameDashboard {
         btn.classList.remove("active")
       })
     })
+  }
+
+  initializeWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsUrl = `${protocol}//${window.location.host}/ws`
+    
+    this.ws = new WebSocket(wsUrl)
+    
+    this.ws.onopen = () => {
+      console.log('WebSocket connected')
+      this.wsReconnectAttempts = 0
+      this.updateConnectionStatus(true)
+    }
+    
+    this.ws.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+      this.handleWebSocketMessage(data)
+    }
+    
+    this.ws.onclose = () => {
+      console.log('WebSocket disconnected')
+      this.updateConnectionStatus(false)
+      this.attemptReconnect()
+    }
+    
+    this.ws.onerror = (error) => {
+      console.error('WebSocket error:', error)
+    }
+  }
+
+  attemptReconnect() {
+    if (this.wsReconnectAttempts < this.maxReconnectAttempts) {
+      this.wsReconnectAttempts++
+      console.log(`Attempting to reconnect (${this.wsReconnectAttempts}/${this.maxReconnectAttempts})...`)
+      setTimeout(() => this.initializeWebSocket(), 3000)
+    } else {
+      console.error('Max reconnection attempts reached')
+      // Fallback to polling
+      this.startDataRefresh()
+    }
+  }
+
+  handleWebSocketMessage(data) {
+    switch (data.type) {
+      case 'gameData':
+        this.updateGameData(data.payload)
+        break
+      case 'highScores':
+        this.highScores = data.payload.scores
+        this.updateHighScoresDisplay()
+        break
+      case 'systemStatus':
+        this.updateSystemStatus(data.payload)
+        break
+      case 'gameState':
+        this.updateGameState(data.payload)
+        // Render game state if game view is enabled
+        if (this.gameViewEnabled && this.gameRenderer[data.payload.game]) {
+          this.gameRenderer[data.payload.game](data.payload.state)
+        }
+        break
+    }
+  }
+
+  updateSystemStatus(data) {
+    document.getElementById("wifiSignal").textContent = this.formatSignalStrength(data.wifiSignal)
+    document.getElementById("uptime").textContent = this.formatUptime(data.uptime)
+    document.getElementById("freeMemory").textContent = this.formatMemory(data.freeMemory)
+    document.getElementById("arduinoStatus").textContent = data.arduinoConnected ? "Connected" : "Disconnected"
+  }
+
+  updateGameState(data) {
+    const { game, state, score, level, lives } = data
+    const gameElement = document.getElementById(`${game}Status`)
+    if (gameElement) {
+      gameElement.textContent = state
+      gameElement.style.background = state === 'Playing' ? 'rgba(76, 175, 80, 0.8)' : 'rgba(255,255,255,0.2)'
+    }
   }
 
   async checkConnection() {
@@ -251,6 +375,12 @@ class GameDashboard {
       filteredScores = this.highScores.filter((score) => score.game.toLowerCase().includes(this.currentScoreFilter))
     }
 
+    // Add user-specific indicators
+    filteredScores = filteredScores.map(score => ({
+      ...score,
+      isCurrentUser: this.isAuthenticated && score.username === this.user.username
+    }))
+
     // Sort by score descending
     filteredScores.sort((a, b) => b.score - a.score)
 
@@ -314,7 +444,148 @@ class GameDashboard {
       this.sessionChart = sessionCanvas.getContext("2d")
     }
 
+    // Initialize game canvas
+    this.gameCanvas = document.getElementById('gameCanvas')
+    this.gameCtx = this.gameCanvas.getContext('2d')
+    this.setupGameCanvas()
+
     this.updateCharts()
+  }
+
+  setupGameCanvas() {
+    // Set canvas size based on container
+    const container = this.gameCanvas.parentElement
+    this.gameCanvas.width = container.clientWidth
+    this.gameCanvas.height = container.clientHeight
+
+    // Initialize game renderer
+    this.gameRenderer = {
+      ufo: this.renderUFOGame.bind(this),
+      snake: this.renderSnakeGame.bind(this),
+      menu: this.renderMenu.bind(this)
+    }
+  }
+
+  renderUFOGame(gameState) {
+    const ctx = this.gameCtx
+    const width = this.gameCanvas.width
+    const height = this.gameCanvas.height
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height)
+
+    // Draw background
+    ctx.fillStyle = '#000033'
+    ctx.fillRect(0, 0, width, height)
+
+    // Draw stars
+    this.drawStars()
+
+    // Draw player
+    ctx.fillStyle = '#00ff00'
+    ctx.fillRect(width/2 - 10, height - 30, 20, 20)
+
+    // Draw UFOs
+    gameState.ufos.forEach(ufo => {
+      ctx.fillStyle = '#ff0000'
+      ctx.beginPath()
+      ctx.arc(ufo.x, ufo.y, 10, 0, Math.PI * 2)
+      ctx.fill()
+    })
+
+    // Draw projectiles
+    gameState.projectiles.forEach(proj => {
+      ctx.fillStyle = '#ffff00'
+      ctx.fillRect(proj.x - 2, proj.y - 8, 4, 8)
+    })
+
+    // Draw score and lives
+    ctx.fillStyle = '#ffffff'
+    ctx.font = '16px Arial'
+    ctx.fillText(`Score: ${gameState.score}`, 10, 20)
+    ctx.fillText(`Lives: ${gameState.lives}`, 10, 40)
+  }
+
+  renderSnakeGame(gameState) {
+    const ctx = this.gameCtx
+    const width = this.gameCanvas.width
+    const height = this.gameCanvas.height
+    const gridSize = 20
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height)
+
+    // Draw background
+    ctx.fillStyle = '#000000'
+    ctx.fillRect(0, 0, width, height)
+
+    // Draw grid
+    ctx.strokeStyle = '#333333'
+    for(let x = 0; x < width; x += gridSize) {
+      ctx.beginPath()
+      ctx.moveTo(x, 0)
+      ctx.lineTo(x, height)
+      ctx.stroke()
+    }
+    for(let y = 0; y < height; y += gridSize) {
+      ctx.beginPath()
+      ctx.moveTo(0, y)
+      ctx.lineTo(width, y)
+      ctx.stroke()
+    }
+
+    // Draw snake
+    gameState.snake.forEach((segment, index) => {
+      ctx.fillStyle = index === 0 ? '#00ff00' : '#00cc00'
+      ctx.fillRect(segment.x * gridSize, segment.y * gridSize, gridSize - 2, gridSize - 2)
+    })
+
+    // Draw food
+    ctx.fillStyle = '#ff0000'
+    ctx.fillRect(gameState.food.x * gridSize, gameState.food.y * gridSize, gridSize - 2, gridSize - 2)
+
+    // Draw score
+    ctx.fillStyle = '#ffffff'
+    ctx.font = '16px Arial'
+    ctx.fillText(`Score: ${gameState.score}`, 10, 20)
+  }
+
+  renderMenu() {
+    const ctx = this.gameCtx
+    const width = this.gameCanvas.width
+    const height = this.gameCanvas.height
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height)
+
+    // Draw background
+    ctx.fillStyle = '#000000'
+    ctx.fillRect(0, 0, width, height)
+
+    // Draw menu items
+    ctx.fillStyle = '#ffffff'
+    ctx.font = '24px Arial'
+    ctx.textAlign = 'center'
+    
+    const menuItems = ['UFO Attack', 'Snake Game', 'Settings']
+    menuItems.forEach((item, index) => {
+      const y = height/2 - 50 + (index * 50)
+      ctx.fillText(item, width/2, y)
+    })
+  }
+
+  drawStars() {
+    const ctx = this.gameCtx
+    const width = this.gameCanvas.width
+    const height = this.gameCanvas.height
+
+    ctx.fillStyle = '#ffffff'
+    for(let i = 0; i < 50; i++) {
+      const x = Math.random() * width
+      const y = Math.random() * height
+      const size = Math.random() * 2
+      ctx.fillRect(x, y, size, size)
+    }
   }
 
   updateCharts() {
@@ -600,6 +871,593 @@ class GameDashboard {
     // Redraw charts on window resize
     setTimeout(() => this.updateCharts(), 100)
   }
+
+  async checkAuth() {
+    const token = localStorage.getItem('authToken')
+    if (token) {
+      try {
+        const response = await fetch('/api/auth/verify', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        })
+        if (response.ok) {
+          const data = await response.json()
+          this.setUser(data.user)
+        } else {
+          this.logout()
+        }
+      } catch (error) {
+        console.error('Auth verification failed:', error)
+        this.logout()
+      }
+    }
+  }
+
+  setUser(userData) {
+    this.user = userData
+    this.isAuthenticated = true
+    this.authToken = userData.token
+    localStorage.setItem('authToken', userData.token)
+    this.updateUserInterface()
+    this.fetchUserSettings()
+  }
+
+  async login(username, password) {
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ username, password })
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        this.setUser(data)
+        return true
+      }
+      return false
+    } catch (error) {
+      console.error('Login failed:', error)
+      return false
+    }
+  }
+
+  async register(username, password, email) {
+    try {
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ username, password, email })
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        this.setUser(data)
+        return true
+      }
+      return false
+    } catch (error) {
+      console.error('Registration failed:', error)
+      return false
+    }
+  }
+
+  logout() {
+    this.user = null
+    this.isAuthenticated = false
+    this.authToken = null
+    localStorage.removeItem('authToken')
+    this.updateUserInterface()
+  }
+
+  updateUserInterface() {
+    const authSection = document.getElementById('authSection')
+    const userSection = document.getElementById('userSection')
+    
+    if (this.isAuthenticated) {
+      authSection.style.display = 'none'
+      userSection.style.display = 'block'
+      document.getElementById('usernameDisplay').textContent = this.user.username
+    } else {
+      authSection.style.display = 'block'
+      userSection.style.display = 'none'
+    }
+  }
+
+  async fetchUserSettings() {
+    if (!this.isAuthenticated) return
+
+    try {
+      const response = await fetch('/api/user/settings', {
+        headers: {
+          'Authorization': `Bearer ${this.authToken}`
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        this.userSettings = data
+        this.applyUserSettings()
+      }
+    } catch (error) {
+      console.error('Failed to fetch user settings:', error)
+    }
+  }
+
+  async saveUserSettings(settings) {
+    if (!this.isAuthenticated) return
+
+    try {
+      const response = await fetch('/api/user/settings', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.authToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(settings)
+      })
+
+      if (response.ok) {
+        this.userSettings = settings
+        this.applyUserSettings()
+      }
+    } catch (error) {
+      console.error('Failed to save user settings:', error)
+    }
+  }
+
+  applyUserSettings() {
+    // Apply user preferences
+    if (this.userSettings.theme) {
+      document.body.className = this.userSettings.theme
+    }
+    if (this.userSettings.refreshRate) {
+      this.refreshRate = this.userSettings.refreshRate
+      this.updateRefreshRateDisplay()
+    }
+    if (this.userSettings.soundEnabled !== undefined) {
+      this.soundEnabled = this.userSettings.soundEnabled
+    }
+  }
+
+  // Add analytics tracking methods
+  trackGameEvent(game, event, data) {
+    if (!this.analytics.gameStats[game]) return
+
+    const stats = this.analytics.gameStats[game]
+    
+    switch (event) {
+      case 'gameStart':
+        stats.totalGames++
+        this.startSession(game)
+        break
+      case 'gameEnd':
+        this.endSession(game, data)
+        break
+      case 'score':
+        stats.totalScore += data.score
+        stats.highScore = Math.max(stats.highScore, data.score)
+        stats.averageScore = stats.totalScore / stats.totalGames
+        break
+      case 'kill':
+        if (game === 'ufo') {
+          stats.killsByLevel[data.level] = (stats.killsByLevel[data.level] || 0) + 1
+        }
+        break
+      case 'death':
+        if (game === 'ufo') {
+          stats.deathsByLevel[data.level] = (stats.deathsByLevel[data.level] || 0) + 1
+        }
+        break
+      case 'food':
+        if (game === 'snake') {
+          stats.foodCollected++
+          stats.maxLength = Math.max(stats.maxLength, data.length)
+          stats.averageLength = (stats.averageLength * (stats.foodCollected - 1) + data.length) / stats.foodCollected
+        }
+        break
+      case 'powerup':
+        if (game === 'ufo') {
+          stats.powerupsCollected++
+        }
+        break
+    }
+
+    this.updateAnalyticsDisplay()
+  }
+
+  startSession(game) {
+    this.analytics.sessionStats[game] = {
+      startTime: Date.now(),
+      score: 0,
+      events: []
+    }
+  }
+
+  endSession(game, data) {
+    const session = this.analytics.sessionStats[game]
+    if (!session) return
+
+    session.endTime = Date.now()
+    session.duration = session.endTime - session.startTime
+    session.finalScore = data.score
+
+    const stats = this.analytics.gameStats[game]
+    stats.totalPlayTime += session.duration
+
+    // Calculate additional metrics
+    if (game === 'ufo') {
+      const totalShots = session.events.filter(e => e.type === 'shot').length
+      const hits = session.events.filter(e => e.type === 'kill').length
+      stats.accuracy = (hits / totalShots) * 100
+    }
+
+    this.saveAnalytics()
+  }
+
+  updateAnalyticsDisplay() {
+    // Update UFO stats
+    const ufoStats = this.analytics.gameStats.ufo
+    document.getElementById('ufoTotalGames').textContent = ufoStats.totalGames
+    document.getElementById('ufoHighScore').textContent = ufoStats.highScore
+    document.getElementById('ufoAverageScore').textContent = Math.round(ufoStats.averageScore)
+    document.getElementById('ufoAccuracy').textContent = `${Math.round(ufoStats.accuracy)}%`
+    document.getElementById('ufoPowerups').textContent = ufoStats.powerupsCollected
+
+    // Update Snake stats
+    const snakeStats = this.analytics.gameStats.snake
+    document.getElementById('snakeTotalGames').textContent = snakeStats.totalGames
+    document.getElementById('snakeHighScore').textContent = snakeStats.highScore
+    document.getElementById('snakeAverageScore').textContent = Math.round(snakeStats.averageScore)
+    document.getElementById('snakeMaxLength').textContent = snakeStats.maxLength
+    document.getElementById('snakeFoodCollected').textContent = snakeStats.foodCollected
+
+    // Update performance metrics
+    this.updatePerformanceMetrics()
+  }
+
+  updatePerformanceMetrics() {
+    const fps = this.analytics.performance.fps
+    const latency = this.analytics.performance.latency
+    const memory = this.analytics.performance.memoryUsage
+
+    document.getElementById('avgFPS').textContent = Math.round(this.calculateAverage(fps))
+    document.getElementById('avgLatency').textContent = `${Math.round(this.calculateAverage(latency))}ms`
+    document.getElementById('memoryUsage').textContent = this.formatMemory(this.calculateAverage(memory))
+  }
+
+  calculateAverage(array) {
+    if (array.length === 0) return 0
+    return array.reduce((a, b) => a + b, 0) / array.length
+  }
+
+  saveAnalytics() {
+    if (this.isAuthenticated) {
+      localStorage.setItem(`analytics_${this.user.username}`, JSON.stringify(this.analytics))
+    }
+  }
+
+  loadAnalytics() {
+    if (this.isAuthenticated) {
+      const saved = localStorage.getItem(`analytics_${this.user.username}`)
+      if (saved) {
+        this.analytics = JSON.parse(saved)
+        this.updateAnalyticsDisplay()
+      }
+    }
+  }
+
+  // Add analytics UI elements
+  initializeAnalyticsUI() {
+    const analyticsSection = document.createElement('div')
+    analyticsSection.className = 'card analytics'
+    analyticsSection.innerHTML = `
+      <div class="card-header">
+        <h2><i class="fas fa-chart-bar"></i> Detailed Analytics</h2>
+      </div>
+      <div class="card-content">
+        <div class="analytics-grid">
+          <div class="analytics-section">
+            <h3>UFO Attack</h3>
+            <div class="stat-grid">
+              <div class="stat">
+                <span class="stat-label">Total Games</span>
+                <span class="stat-value" id="ufoTotalGames">0</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">High Score</span>
+                <span class="stat-value" id="ufoHighScore">0</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Average Score</span>
+                <span class="stat-value" id="ufoAverageScore">0</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Accuracy</span>
+                <span class="stat-value" id="ufoAccuracy">0%</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Powerups</span>
+                <span class="stat-value" id="ufoPowerups">0</span>
+              </div>
+            </div>
+          </div>
+          <div class="analytics-section">
+            <h3>Snake Game</h3>
+            <div class="stat-grid">
+              <div class="stat">
+                <span class="stat-label">Total Games</span>
+                <span class="stat-value" id="snakeTotalGames">0</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">High Score</span>
+                <span class="stat-value" id="snakeHighScore">0</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Average Score</span>
+                <span class="stat-value" id="snakeAverageScore">0</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Max Length</span>
+                <span class="stat-value" id="snakeMaxLength">0</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Food Collected</span>
+                <span class="stat-value" id="snakeFoodCollected">0</span>
+              </div>
+            </div>
+          </div>
+          <div class="analytics-section">
+            <h3>Performance</h3>
+            <div class="stat-grid">
+              <div class="stat">
+                <span class="stat-label">Average FPS</span>
+                <span class="stat-value" id="avgFPS">0</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Average Latency</span>
+                <span class="stat-value" id="avgLatency">0ms</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Memory Usage</span>
+                <span class="stat-value" id="memoryUsage">0MB</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `
+
+    document.querySelector('.dashboard').appendChild(analyticsSection)
+  }
+
+  setupAutoSave() {
+    if (this.autoSaveInterval) {
+      clearInterval(this.autoSaveInterval)
+    }
+
+    if (this.autoSaveEnabled) {
+      this.autoSaveInterval = setInterval(() => {
+        this.autoSave()
+      }, 60000) // Auto-save every minute
+    }
+  }
+
+  async saveGame(game, data) {
+    if (!this.isAuthenticated) return false
+
+    try {
+      const saveData = {
+        game,
+        timestamp: Date.now(),
+        data: {
+          ...data,
+          version: '1.0' // For future compatibility
+        }
+      }
+
+      // Save locally
+      this.savedGames[game] = saveData
+      localStorage.setItem(`savedGame_${this.user.username}_${game}`, JSON.stringify(saveData))
+
+      // Save to server
+      const response = await fetch('/api/games/save', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.authToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(saveData)
+      })
+
+      if (response.ok) {
+        this.showNotification('Game saved successfully')
+        return true
+      }
+      return false
+    } catch (error) {
+      console.error('Failed to save game:', error)
+      return false
+    }
+  }
+
+  async loadGame(game) {
+    if (!this.isAuthenticated) return null
+
+    try {
+      // Try to load from server first
+      const response = await fetch(`/api/games/load/${game}`, {
+        headers: {
+          'Authorization': `Bearer ${this.authToken}`
+        }
+      })
+
+      if (response.ok) {
+        const saveData = await response.json()
+        this.savedGames[game] = saveData
+        this.showNotification('Game loaded successfully')
+        return saveData.data
+      }
+
+      // Fallback to local storage
+      const localSave = localStorage.getItem(`savedGame_${this.user.username}_${game}`)
+      if (localSave) {
+        const saveData = JSON.parse(localSave)
+        this.savedGames[game] = saveData
+        this.showNotification('Game loaded from local storage')
+        return saveData.data
+      }
+
+      return null
+    } catch (error) {
+      console.error('Failed to load game:', error)
+      return null
+    }
+  }
+
+  async deleteSave(game) {
+    if (!this.isAuthenticated) return false
+
+    try {
+      // Delete from server
+      const response = await fetch(`/api/games/delete/${game}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${this.authToken}`
+        }
+      })
+
+      // Delete locally
+      delete this.savedGames[game]
+      localStorage.removeItem(`savedGame_${this.user.username}_${game}`)
+
+      if (response.ok) {
+        this.showNotification('Save file deleted')
+        return true
+      }
+      return false
+    } catch (error) {
+      console.error('Failed to delete save:', error)
+      return false
+    }
+  }
+
+  loadSavedGames() {
+    if (!this.isAuthenticated) return
+
+    // Load from local storage
+    const games = ['ufo', 'snake']
+    games.forEach(game => {
+      const saved = localStorage.getItem(`savedGame_${this.user.username}_${game}`)
+      if (saved) {
+        this.savedGames[game] = JSON.parse(saved)
+      }
+    })
+
+    this.updateSaveGameUI()
+  }
+
+  autoSave() {
+    if (!this.isAuthenticated || !this.autoSaveEnabled) return
+
+    const currentGame = this.gameData.currentGame
+    if (currentGame && currentGame !== 'menu') {
+      this.saveGame(currentGame, this.gameData)
+    }
+  }
+
+  showNotification(message) {
+    const notification = document.createElement('div')
+    notification.className = 'notification'
+    notification.textContent = message
+    document.body.appendChild(notification)
+
+    setTimeout(() => {
+      notification.remove()
+    }, 3000)
+  }
+
+  updateSaveGameUI() {
+    const saveGameSection = document.getElementById('saveGameSection')
+    if (!saveGameSection) return
+
+    const currentGame = this.gameData.currentGame
+    const hasSave = this.savedGames[currentGame]
+
+    // Update save button
+    const saveButton = document.getElementById('saveGameButton')
+    if (saveButton) {
+      saveButton.disabled = !this.isAuthenticated
+      saveButton.textContent = hasSave ? 'Save Game (Overwrite)' : 'Save Game'
+    }
+
+    // Update load button
+    const loadButton = document.getElementById('loadGameButton')
+    if (loadButton) {
+      loadButton.disabled = !this.isAuthenticated || !hasSave
+    }
+
+    // Update delete button
+    const deleteButton = document.getElementById('deleteSaveButton')
+    if (deleteButton) {
+      deleteButton.disabled = !this.isAuthenticated || !hasSave
+    }
+
+    // Update last saved time
+    const lastSaved = document.getElementById('lastSavedTime')
+    if (lastSaved && hasSave) {
+      const date = new Date(this.savedGames[currentGame].timestamp)
+      lastSaved.textContent = `Last saved: ${date.toLocaleString()}`
+    }
+  }
+
+  // Add save game UI elements
+  initializeSaveGameUI() {
+    const saveGameSection = document.createElement('div')
+    saveGameSection.id = 'saveGameSection'
+    saveGameSection.className = 'card save-game'
+    saveGameSection.innerHTML = `
+      <div class="card-header">
+        <h2><i class="fas fa-save"></i> Save Game</h2>
+        <div class="save-status">
+          <span id="lastSavedTime">No save file</span>
+        </div>
+      </div>
+      <div class="card-content">
+        <div class="save-controls">
+          <button id="saveGameButton" onclick="dashboard.saveGame(dashboard.gameData.currentGame, dashboard.gameData)">
+            Save Game
+          </button>
+          <button id="loadGameButton" onclick="dashboard.loadGame(dashboard.gameData.currentGame)">
+            Load Game
+          </button>
+          <button id="deleteSaveButton" onclick="dashboard.deleteSave(dashboard.gameData.currentGame)">
+            Delete Save
+          </button>
+        </div>
+        <div class="auto-save-controls">
+          <label>
+            <input type="checkbox" id="autoSaveCheckbox" 
+              ${this.autoSaveEnabled ? 'checked' : ''} 
+              onchange="dashboard.toggleAutoSave(this.checked)">
+            Enable Auto-Save
+          </label>
+        </div>
+      </div>
+    `
+
+    document.querySelector('.dashboard').appendChild(saveGameSection)
+  }
+
+  toggleAutoSave(enabled) {
+    this.autoSaveEnabled = enabled
+    this.setupAutoSave()
+  }
 }
 
 // Global Functions (called from HTML)
@@ -724,6 +1582,50 @@ document.addEventListener("DOMContentLoaded", () => {
       event.target.style.display = "none"
     }
   })
+
+  // Add auth-related UI elements to the HTML
+  const authSection = document.createElement('div')
+  authSection.id = 'authSection'
+  authSection.innerHTML = `
+    <div class="auth-forms">
+      <div class="login-form">
+        <h3>Login</h3>
+        <input type="text" id="loginUsername" placeholder="Username">
+        <input type="password" id="loginPassword" placeholder="Password">
+        <button onclick="dashboard.login(
+          document.getElementById('loginUsername').value,
+          document.getElementById('loginPassword').value
+        )">Login</button>
+      </div>
+      <div class="register-form">
+        <h3>Register</h3>
+        <input type="text" id="registerUsername" placeholder="Username">
+        <input type="email" id="registerEmail" placeholder="Email">
+        <input type="password" id="registerPassword" placeholder="Password">
+        <button onclick="dashboard.register(
+          document.getElementById('registerUsername').value,
+          document.getElementById('registerPassword').value,
+          document.getElementById('registerEmail').value
+        )">Register</button>
+      </div>
+    </div>
+  `
+
+  const userSection = document.createElement('div')
+  userSection.id = 'userSection'
+  userSection.innerHTML = `
+    <div class="user-info">
+      <span>Welcome, <span id="usernameDisplay"></span>!</span>
+      <button onclick="dashboard.logout()">Logout</button>
+    </div>
+  `
+
+  document.querySelector('.header-content').appendChild(authSection)
+  document.querySelector('.header-content').appendChild(userSection)
+
+  // Initialize analytics UI when the dashboard is created
+  dashboard.initializeAnalyticsUI()
+  dashboard.initializeSaveGameUI()
 })
 
 // Add game visualization methods to dashboard
@@ -780,3 +1682,151 @@ GameDashboard.prototype.drawGameState = (ctx, canvas) => {
     ctx.stroke()
   }
 }
+
+// LED Control
+class LEDController {
+  constructor() {
+    this.colorPicker = document.querySelector('#ledColor');
+    this.brightnessSlider = document.querySelector('#ledBrightness');
+    this.modeButtons = document.querySelectorAll('.mode-btn');
+    this.powerButton = document.querySelector('#ledPower');
+    this.ledPreview = document.querySelector('.led-light');
+    this.ledInfo = document.querySelector('.led-info');
+    
+    this.currentColor = '#ff0000';
+    this.currentBrightness = 100;
+    this.currentMode = 'solid';
+    this.isOn = false;
+    
+    this.initializeEventListeners();
+  }
+  
+  initializeEventListeners() {
+    // Color picker
+    this.colorPicker.addEventListener('input', (e) => {
+      this.currentColor = e.target.value;
+      this.updateLED();
+    });
+    
+    // Brightness slider
+    this.brightnessSlider.addEventListener('input', (e) => {
+      this.currentBrightness = e.target.value;
+      this.updateLED();
+    });
+    
+    // Mode buttons
+    this.modeButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.modeButtons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.currentMode = btn.dataset.mode;
+        this.updateLED();
+      });
+    });
+    
+    // Power button
+    this.powerButton.addEventListener('click', () => {
+      this.isOn = !this.isOn;
+      this.powerButton.textContent = this.isOn ? 'Turn Off' : 'Turn On';
+      this.powerButton.classList.toggle('active');
+      this.updateLED();
+    });
+  }
+  
+  updateLED() {
+    if (!this.isOn) {
+      this.ledPreview.className = 'led-light off';
+      this.ledPreview.style.backgroundColor = '#333';
+      this.ledPreview.style.boxShadow = 'none';
+      this.updateInfo();
+      return;
+    }
+    
+    // Update LED appearance
+    this.ledPreview.className = 'led-light';
+    this.ledPreview.style.backgroundColor = this.currentColor;
+    
+    // Calculate brightness-adjusted color
+    const brightness = this.currentBrightness / 100;
+    const rgb = this.hexToRgb(this.currentColor);
+    const adjustedColor = `rgb(${rgb.r * brightness}, ${rgb.g * brightness}, ${rgb.b * brightness})`;
+    
+    // Apply mode-specific effects
+    switch (this.currentMode) {
+      case 'solid':
+        this.ledPreview.style.boxShadow = `0 0 20px ${adjustedColor}`;
+        break;
+      case 'blink':
+        this.ledPreview.classList.add('blink');
+        break;
+      case 'pulse':
+        this.ledPreview.classList.add('pulse');
+        break;
+      case 'rainbow':
+        this.ledPreview.classList.add('rainbow');
+        break;
+    }
+    
+    this.updateInfo();
+    this.sendToArduino();
+  }
+  
+  updateInfo() {
+    const info = this.ledInfo;
+    info.innerHTML = `
+      <p>Color: <span>${this.currentColor}</span></p>
+      <p>Brightness: <span>${this.currentBrightness}%</span></p>
+      <p>Mode: <span>${this.currentMode}</span></p>
+      <p>Status: <span>${this.isOn ? 'On' : 'Off'}</span></p>
+    `;
+  }
+  
+  hexToRgb(hex) {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+      r: parseInt(result[1], 16),
+      g: parseInt(result[2], 16),
+      b: parseInt(result[3], 16)
+    } : null;
+  }
+  
+  sendToArduino() {
+    if (!this.isOn) {
+      // Send command to turn off LED
+      this.sendCommand('LED_OFF');
+      return;
+    }
+    
+    const rgb = this.hexToRgb(this.currentColor);
+    const brightness = this.currentBrightness;
+    const mode = this.currentMode;
+    
+    // Create command object
+    const command = {
+      type: 'LED_CONTROL',
+      data: {
+        r: rgb.r,
+        g: rgb.g,
+        b: rgb.b,
+        brightness: brightness,
+        mode: mode
+      }
+    };
+    
+    // Send command through WebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(command));
+    }
+  }
+  
+  sendCommand(command) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: command }));
+    }
+  }
+}
+
+// Initialize LED Controller when DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+  const ledController = new LEDController();
+});

@@ -292,11 +292,52 @@
                     </div>
                 </div>
             </div>
+
+            <!-- LED Control Panel -->
+            <div class="card led-control">
+                <div class="card-header">
+                    <h2><i class="fas fa-lightbulb"></i> LED Control</h2>
+                    <div class="led-status">
+                        <span id="ledStatus">Off</span>
+                    </div>
+                </div>
+                <div class="card-content">
+                    <div class="led-controls">
+                        <div class="color-picker">
+                            <input type="color" id="ledColor" value="#ff0000" onchange="updateLEDColor(this.value)">
+                            <label for="ledColor">Pick Color</label>
+                        </div>
+                        <div class="brightness-control">
+                            <label for="ledBrightness">Brightness</label>
+                            <input type="range" id="ledBrightness" min="0" max="255" value="255" onchange="updateLEDBrightness(this.value)">
+                        </div>
+                        <div class="led-modes">
+                            <button onclick="setLEDMode('solid')" class="mode-btn active">Solid</button>
+                            <button onclick="setLEDMode('blink')" class="mode-btn">Blink</button>
+                            <button onclick="setLEDMode('pulse')" class="mode-btn">Pulse</button>
+                            <button onclick="setLEDMode('rainbow')" class="mode-btn">Rainbow</button>
+                        </div>
+                        <div class="led-power">
+                            <button id="ledPowerBtn" onclick="toggleLED()" class="power-btn">
+                                <i class="fas fa-power-off"></i> Toggle LED
+                            </button>
+                        </div>
+                    </div>
+                    <div class="led-preview">
+                        <div id="ledPreview" class="led-light"></div>
+                        <div class="led-info">
+                            <p>Current Color: <span id="currentColor">#ff0000</span></p>
+                            <p>Brightness: <span id="currentBrightness">100%</span></p>
+                            <p>Mode: <span id="currentMode">Solid</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </main>
 
         <!-- Footer -->
         <footer class="footer">
-            <p>&copy; 2024 Arduino Gaming System | 
+            <p>&copy; 2025 Arduino Gaming System | 
                <span>Arduino + ESP8266 Web Dashboard</span> | 
                <a href="#" onclick="showAbout()">About</a> | 
                <a href="#" onclick="showHelp()">Help</a>
