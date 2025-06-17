@@ -1473,3 +1473,129 @@ body.dark-mode select {
     text-align: center;
   }
 }
+
+/* Music Sync Controls */
+.music-sync-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    padding: 15px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 12px;
+    border: 1px solid var(--card-border);
+}
+
+.sync-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.sync-toggle label {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.sync-toggle input[type="checkbox"] {
+    width: 40px;
+    height: 20px;
+    -webkit-appearance: none;
+    background: var(--card-bg);
+    border-radius: 20px;
+    position: relative;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.sync-toggle input[type="checkbox"]:checked {
+    background: var(--gradient-primary);
+}
+
+.sync-toggle input[type="checkbox"]::before {
+    content: '';
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: white;
+    top: 2px;
+    left: 2px;
+    transition: all 0.3s ease;
+}
+
+.sync-toggle input[type="checkbox"]:checked::before {
+    left: 22px;
+}
+
+.sensitivity-control {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sensitivity-control label {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.sensitivity-control input[type="range"] {
+    width: 100%;
+    height: 6px;
+    -webkit-appearance: none;
+    background: var(--gradient-primary);
+    border-radius: 3px;
+    outline: none;
+}
+
+.sensitivity-control input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    background: white;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: var(--shadow-sm);
+}
+
+.sensitivity-control span {
+    color: var(--text-secondary);
+    font-size: 0.9em;
+    text-align: right;
+}
+
+.beat-visualizer {
+    width: 100%;
+    height: 50px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+}
+
+#beatCanvas {
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+}
+
+.led-light.music {
+    animation: musicPulse 0.5s ease-out;
+}
+
+@keyframes musicPulse {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.2); opacity: 0.8; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+/* Responsive Design for Music Sync */
+@media (max-width: 768px) {
+    .music-sync-controls {
+        padding: 10px;
+    }
+    
+    .beat-visualizer {
+        height: 40px;
+    }
+}

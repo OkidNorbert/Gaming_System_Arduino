@@ -316,6 +316,21 @@
                             <button onclick="setLEDMode('blink')" class="mode-btn">Blink</button>
                             <button onclick="setLEDMode('pulse')" class="mode-btn">Pulse</button>
                             <button onclick="setLEDMode('rainbow')" class="mode-btn">Rainbow</button>
+                            <button onclick="setLEDMode('music')" class="mode-btn">Music Sync</button>
+                        </div>
+                        <div class="music-sync-controls">
+                            <div class="sync-toggle">
+                                <label for="musicSync">Music Sync</label>
+                                <input type="checkbox" id="musicSync" onchange="toggleMusicSync(this.checked)">
+                            </div>
+                            <div class="sensitivity-control">
+                                <label for="sensitivity">Sensitivity</label>
+                                <input type="range" id="sensitivity" min="1" max="100" value="50" onchange="updateSensitivity(this.value)">
+                                <span id="sensitivityValue">50%</span>
+                            </div>
+                            <div class="beat-visualizer">
+                                <canvas id="beatCanvas" width="200" height="50"></canvas>
+                            </div>
                         </div>
                         <div class="led-power">
                             <button id="ledPowerBtn" onclick="toggleLED()" class="power-btn">
@@ -329,6 +344,7 @@
                             <p>Current Color: <span id="currentColor">#ff0000</span></p>
                             <p>Brightness: <span id="currentBrightness">100%</span></p>
                             <p>Mode: <span id="currentMode">Solid</span></p>
+                            <p>Music Sync: <span id="musicSyncStatus">Off</span></p>
                         </div>
                     </div>
                 </div>

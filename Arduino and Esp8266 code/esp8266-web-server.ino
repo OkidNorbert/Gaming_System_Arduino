@@ -28,6 +28,17 @@ unsigned long lastArduinoResponse = 0;
 unsigned long lastDataRequest = 0;
 const unsigned long dataRequestInterval = 2000; // Request data every 2 seconds
 
+// LED Control Variables
+struct LEDControl {
+  int r = 0;
+  int g = 0;
+  int b = 0;
+  int brightness = 100;
+  String mode = "solid";
+  bool isOn = false;
+  bool musicSync = false;
+} ledControl;
+
 // ===== SETUP =====
 void setup() {
   Serial.begin(9600);
@@ -204,25 +215,69 @@ void setupWebServer() {
       deserializeJson(doc, server.arg("plain"));
       
       // Extract LED control parameters
-      int r = doc["r"] | 0;
-      int g = doc["g"] | 0;
-      int b = doc["b"] | 0;
-      int brightness = doc["brightness"] | 100;
-      String mode = doc["mode"] | "solid";
-      bool isOn = doc["isOn"] | false;
+      ledControl.r = doc["r"] | 0;
+      ledControl.g = doc["g"] | 0;
+      ledControl.b = doc["b"] | 0;
+      ledControl.brightness = doc["brightness"] | 100;
+      ledControl.mode = doc["mode"] | "solid";
+      ledControl.isOn = doc["isOn"] | false;
+      ledControl.musicSync = doc["musicSync"] | false;
       
       // Create LED control command
-      String ledCommand = "LED_CONTROL:" + String(r) + "," + 
-                         String(g) + "," + 
-                         String(b) + "," + 
-                         String(brightness) + "," + 
-                         mode + "," + 
-                         String(isOn ? "true" : "false");
+      String ledCommand = "LED_CONTROL:" + String(ledControl.r) + "," + 
+                         String(ledControl.g) + "," + 
+                         String(ledControl.b) + "," + 
+                         String(ledControl.brightness) + "," + 
+                         ledControl.mode + "," + 
+                         String(ledControl.isOn ? "true" : "false") + "," +
+                         String(ledControl.musicSync ? "true" : "false");
       
       // Send command to Arduino
       Serial.println(ledCommand);
       
-      server.send(200, "application/json", "{\"status\":\"ok\"}");
+      // Send response with current LED state
+      DynamicJsonDocument response(256);
+      response["status"] = "ok";
+      response["r"] = ledControl.r;
+      response["g"] = ledControl.g;
+      response["b"] = ledControl.b;
+      response["brightness"] = ledControl.brightness;
+      response["mode"] = ledControl.mode;
+      response["isOn"] = ledControl.isOn;
+      response["musicSync"] = ledControl.musicSync;
+      
+      String responseStr;
+      serializeJson(response, responseStr);
+      server.send(200, "application/json", responseStr);
+    } else {
+      server.send(400, "application/json", "{\"error\":\"No data\"}");
+    }
+  });
+  
+  // API endpoint for music sync control
+  server.on("/api/music-sync", HTTP_POST, []() {
+    if (server.hasArg("plain")) {
+      DynamicJsonDocument doc(256);
+      deserializeJson(doc, server.arg("plain"));
+      
+      bool enable = doc["enable"] | false;
+      int sensitivity = doc["sensitivity"] | 50;
+      
+      // Create music sync command
+      String musicCommand = "MUSIC_SYNC:" + String(enable ? "true" : "false") + "," + String(sensitivity);
+      
+      // Send command to Arduino
+      Serial.println(musicCommand);
+      
+      // Send response
+      DynamicJsonDocument response(256);
+      response["status"] = "ok";
+      response["enabled"] = enable;
+      response["sensitivity"] = sensitivity;
+      
+      String responseStr;
+      serializeJson(response, responseStr);
+      server.send(200, "application/json", responseStr);
     } else {
       server.send(400, "application/json", "{\"error\":\"No data\"}");
     }
@@ -303,6 +358,12 @@ void processSerialMessage(String message) {
   else if (message.startsWith("STATS:")) {
     // Statistics from Arduino
     lastStats = message.substring(6);
+    lastArduinoResponse = millis();
+    arduinoConnected = true;
+  }
+  else if (message.startsWith("BEAT:")) {
+    // Beat detection event from Arduino
+    // Forward to connected WebSocket clients if implemented
     lastArduinoResponse = millis();
     arduinoConnected = true;
   }

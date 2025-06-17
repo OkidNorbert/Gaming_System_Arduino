@@ -186,6 +186,9 @@ class GameDashboard {
           this.gameRenderer[data.payload.game](data.payload.state)
         }
         break
+      case 'beat':
+        this.handleBeat(data.value)
+        break
     }
   }
 
@@ -1458,6 +1461,10 @@ class GameDashboard {
     this.autoSaveEnabled = enabled
     this.setupAutoSave()
   }
+
+  handleBeat(beat) {
+    // Implementation of handleBeat method
+  }
 }
 
 // Global Functions (called from HTML)
@@ -1686,101 +1693,121 @@ GameDashboard.prototype.drawGameState = (ctx, canvas) => {
 // LED Control
 class LEDController {
   constructor() {
-    this.colorPicker = document.querySelector('#ledColor');
-    this.brightnessSlider = document.querySelector('#ledBrightness');
-    this.modeButtons = document.querySelectorAll('.mode-btn');
-    this.powerButton = document.querySelector('#ledPower');
-    this.ledPreview = document.querySelector('.led-light');
-    this.ledInfo = document.querySelector('.led-info');
-    
-    this.currentColor = '#ff0000';
-    this.currentBrightness = 100;
-    this.currentMode = 'solid';
+    this.color = '#ff0000';
+    this.brightness = 255;
+    this.mode = 'solid';
     this.isOn = false;
+    this.musicSync = false;
+    this.sensitivity = 50;
+    this.beatCanvas = document.getElementById('beatCanvas');
+    this.beatCtx = this.beatCanvas.getContext('2d');
+    this.beatData = new Array(50).fill(0);
+    this.lastBeat = 0;
     
     this.initializeEventListeners();
+    this.updateInfo();
   }
   
   initializeEventListeners() {
     // Color picker
-    this.colorPicker.addEventListener('input', (e) => {
-      this.currentColor = e.target.value;
+    document.getElementById('ledColor').addEventListener('input', (e) => {
+      this.color = e.target.value;
       this.updateLED();
     });
     
     // Brightness slider
-    this.brightnessSlider.addEventListener('input', (e) => {
-      this.currentBrightness = e.target.value;
+    document.getElementById('ledBrightness').addEventListener('input', (e) => {
+      this.brightness = e.target.value;
       this.updateLED();
     });
     
     // Mode buttons
-    this.modeButtons.forEach(btn => {
+    document.querySelectorAll('.mode-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        this.modeButtons.forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        this.currentMode = btn.dataset.mode;
+        this.mode = btn.dataset.mode;
         this.updateLED();
       });
     });
     
     // Power button
-    this.powerButton.addEventListener('click', () => {
+    document.getElementById('ledPower').addEventListener('click', () => {
       this.isOn = !this.isOn;
-      this.powerButton.textContent = this.isOn ? 'Turn Off' : 'Turn On';
-      this.powerButton.classList.toggle('active');
+      this.updateLED();
+    });
+
+    // Music sync controls
+    document.getElementById('musicSync').addEventListener('change', (e) => {
+      this.musicSync = e.target.checked;
+      this.updateLED();
+    });
+
+    document.getElementById('sensitivity').addEventListener('input', (e) => {
+      this.sensitivity = parseInt(e.target.value);
+      document.getElementById('sensitivityValue').textContent = `${this.sensitivity}%`;
       this.updateLED();
     });
   }
   
   updateLED() {
-    if (!this.isOn) {
-      this.ledPreview.className = 'led-light off';
-      this.ledPreview.style.backgroundColor = '#333';
-      this.ledPreview.style.boxShadow = 'none';
-      this.updateInfo();
-      return;
+    const preview = document.getElementById('ledPreview');
+    const status = document.getElementById('ledStatus');
+    const currentMode = document.getElementById('currentMode');
+    const musicSyncStatus = document.getElementById('musicSyncStatus');
+
+    // Update LED preview
+    preview.style.backgroundColor = this.color;
+    preview.style.boxShadow = `0 0 20px ${this.color}`;
+    preview.style.opacity = this.isOn ? (this.brightness / 255) : 0;
+
+    // Update classes
+    preview.className = 'led-light';
+    if (this.isOn) {
+      preview.classList.add(this.mode);
+      if (this.musicSync) {
+        preview.classList.add('music');
+      }
     }
-    
-    // Update LED appearance
-    this.ledPreview.className = 'led-light';
-    this.ledPreview.style.backgroundColor = this.currentColor;
-    
-    // Calculate brightness-adjusted color
-    const brightness = this.currentBrightness / 100;
-    const rgb = this.hexToRgb(this.currentColor);
-    const adjustedColor = `rgb(${rgb.r * brightness}, ${rgb.g * brightness}, ${rgb.b * brightness})`;
-    
-    // Apply mode-specific effects
-    switch (this.currentMode) {
-      case 'solid':
-        this.ledPreview.style.boxShadow = `0 0 20px ${adjustedColor}`;
-        break;
-      case 'blink':
-        this.ledPreview.classList.add('blink');
-        break;
-      case 'pulse':
-        this.ledPreview.classList.add('pulse');
-        break;
-      case 'rainbow':
-        this.ledPreview.classList.add('rainbow');
-        break;
-    }
-    
-    this.updateInfo();
+
+    // Update status text
+    status.textContent = this.isOn ? 'On' : 'Off';
+    currentMode.textContent = this.mode.charAt(0).toUpperCase() + this.mode.slice(1);
+    musicSyncStatus.textContent = this.musicSync ? 'On' : 'Off';
+
+    // Send to Arduino
     this.sendToArduino();
   }
   
   updateInfo() {
-    const info = this.ledInfo;
-    info.innerHTML = `
-      <p>Color: <span>${this.currentColor}</span></p>
-      <p>Brightness: <span>${this.currentBrightness}%</span></p>
-      <p>Mode: <span>${this.currentMode}</span></p>
-      <p>Status: <span>${this.isOn ? 'On' : 'Off'}</span></p>
-    `;
+    document.getElementById('currentColor').textContent = this.color;
+    document.getElementById('currentBrightness').textContent = `${Math.round((this.brightness / 255) * 100)}%`;
+    document.getElementById('currentMode').textContent = this.mode.charAt(0).toUpperCase() + this.mode.slice(1);
+    document.getElementById('musicSyncStatus').textContent = this.musicSync ? 'On' : 'Off';
   }
   
+  sendToArduino() {
+    const rgb = this.hexToRgb(this.color);
+    const command = {
+      r: rgb.r,
+      g: rgb.g,
+      b: rgb.b,
+      brightness: this.brightness,
+      mode: this.mode,
+      isOn: this.isOn,
+      musicSync: this.musicSync,
+      sensitivity: this.sensitivity
+    };
+
+    this.sendCommand('LED_CONTROL', command);
+  }
+
+  sendCommand(command) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: command }));
+    }
+  }
+
   hexToRgb(hex) {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return result ? {
@@ -1789,44 +1816,57 @@ class LEDController {
       b: parseInt(result[3], 16)
     } : null;
   }
-  
-  sendToArduino() {
-    if (!this.isOn) {
-      // Send command to turn off LED
-      this.sendCommand('LED_OFF');
-      return;
-    }
-    
-    const rgb = this.hexToRgb(this.currentColor);
-    const brightness = this.currentBrightness;
-    const mode = this.currentMode;
-    
-    // Create command object
-    const command = {
-      type: 'LED_CONTROL',
-      data: {
-        r: rgb.r,
-        g: rgb.g,
-        b: rgb.b,
-        brightness: brightness,
-        mode: mode
-      }
-    };
-    
-    // Send command through WebSocket
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(command));
-    }
+
+  handleBeat(beat) {
+    if (!this.musicSync) return;
+
+    // Update beat visualization
+    this.beatData.push(beat);
+    this.beatData.shift();
+    this.drawBeatVisualizer();
+
+    // Trigger LED animation
+    const preview = document.getElementById('ledPreview');
+    preview.classList.remove('music');
+    void preview.offsetWidth; // Trigger reflow
+    preview.classList.add('music');
   }
-  
-  sendCommand(command) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: command }));
-    }
+
+  drawBeatVisualizer() {
+    const ctx = this.beatCtx;
+    const width = this.beatCanvas.width;
+    const height = this.beatCanvas.height;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height);
+
+    // Draw background
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.fillRect(0, 0, width, height);
+
+    // Draw beat bars
+    const barWidth = width / this.beatData.length;
+    ctx.fillStyle = this.color;
+
+    this.beatData.forEach((value, index) => {
+      const barHeight = (value / 255) * height;
+      ctx.fillRect(
+        index * barWidth,
+        height - barHeight,
+        barWidth - 1,
+        barHeight
+      );
+    });
   }
 }
 
-// Initialize LED Controller when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-  const ledController = new LEDController();
-});
+// Initialize LED Controller
+const ledController = new LEDController();
+
+// Handle beat detection messages from WebSocket
+function handleWebSocketMessage(data) {
+  if (data.type === 'beat') {
+    ledController.handleBeat(data.value);
+  }
+  // ... existing message handling ...
+}

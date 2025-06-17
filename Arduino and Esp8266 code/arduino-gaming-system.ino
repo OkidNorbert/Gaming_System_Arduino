@@ -9,8 +9,19 @@
 #include <Max72xxPanel.h>
 #include <LiquidCrystal.h>
 #include <EEPROM.h>
+#include <FastLED.h>
 
 // ===== HARDWARE CONFIGURATION =====
+#define NUM_LEDS 16
+#define LED_PIN 6
+#define JOYSTICK_X A0
+#define JOYSTICK_Y A1
+#define BUTTON_PIN 2
+#define MIC_PIN A2
+
+// LED control pins
+const int ledPins[NUM_LEDS] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, A3, A4, A5, 2, 3};
+
 // LED Matrix
 const int pinCS = 10;
 const int numberOfHorizontalDisplays = 4;
@@ -38,11 +49,15 @@ const int ledBluePin = A4;
 
 // LED Control Variables
 struct LEDState {
-  int r, g, b;
-  int brightness;
-  String mode;
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+  uint8_t brightness;
+  bool musicSync;
   bool isOn;
-} ledState = {0, 0, 0, 100, "solid", false};
+  uint8_t sensitivity;
+  String mode;
+} ledState = {0, 0, 0, 100, false, false, 50, "solid"};
 
 // LED State Persistence
 const int EEPROM_LED_STATE_ADDR = 512; // After game stats
@@ -73,13 +88,15 @@ const unsigned long dataSendInterval = 1000; // Send data every second
 enum GameState {
   MAIN_MENU,
   GAME_MENU,
-  UFO_ATTACK,
+  UFO_ATTACK_MODE,
   SNAKE_GAME,
   SETTINGS,
-  HIGH_SCORES
+  HIGH_SCORES,
+  PONG_GAME
 };
 
 GameState currentState = MAIN_MENU;
+uint8_t selectedMenuItem = 0;
 int menuSelection = 0;
 int maxMenuItems = 4;
 unsigned long lastInputTime = 0;
@@ -101,6 +118,7 @@ MenuItem mainMenu[] = {
 MenuItem gameMenu[] = {
   {"UFO Attack", "Space shooter"},
   {"Snake Game", "Classic arcade"},
+  {"Pong", "Classic tennis"},
   {"Back", "Return to main"}
 };
 
@@ -188,15 +206,545 @@ struct GameStats {
 
 GameStats gameStats;
 
+// Microphone Module (4-pin: AO, G, +, DO)
+const int micPin = A5; // AO pin of microphone module to Arduino A5
+int micThreshold = 50; // Lower default threshold for better sensitivity
+const int SAMPLE_WINDOW = 50; // Sample window for beat detection
+int sampleBuffer[10]; // Buffer for smoothing
+int sampleIndex = 0;
+int sampleSum = 0;
+unsigned long lastBeatTime = 0;
+bool beatDetected = false;
+
+// Add new LED modes
+const char* ledModes[] = {"solid", "blink", "pulse", "rainbow", "music", "strobe", "wave", "colorcycle"};
+
+// Move constant strings to PROGMEM
+const char GAME_OVER[] PROGMEM = "GAME OVER";
+const char HIGH_SCORE[] PROGMEM = "HIGH SCORE";
+const char SCORE[] PROGMEM = "SCORE";
+const char LEVEL[] PROGMEM = "LEVEL";
+const char LIVES[] PROGMEM = "LIVES";
+const char MENU[] PROGMEM = "MENU";
+const char UFO_ATTACK[] PROGMEM = "UFO ATTACK";
+const char SNAKE[] PROGMEM = "SNAKE";
+const char LED_CONTROL[] PROGMEM = "LED_CONTROL";
+const char MUSIC_SYNC[] PROGMEM = "MUSIC_SYNC";
+
+// Reduce array sizes
+#define MAX_SNAKE_LENGTH 32  // Reduced from 64
+#define MAX_ENEMIES 8        // Reduced from 16
+#define MAX_BULLETS 4        // Reduced from 8
+#define SAMPLE_BUFFER_SIZE 16 // Reduced from 32
+
+// Use smaller data types for coordinates
+int8_t snakeX[MAX_SNAKE_LENGTH];
+int8_t snakeY[MAX_SNAKE_LENGTH];
+int8_t enemyX[MAX_ENEMIES];
+int8_t enemyY[MAX_ENEMIES];
+int8_t bulletX[MAX_BULLETS];
+int8_t bulletY[MAX_BULLETS];
+uint8_t sampleBuffer[SAMPLE_BUFFER_SIZE];  // Changed from uint16_t to uint8_t
+
+// Optimize timing variables
+uint16_t lastUpdate = 0;    // Changed from unsigned long
+uint16_t lastSpawn = 0;     // Changed from unsigned long
+uint16_t lastBeat = 0;      // Changed from unsigned long
+
+// Optimize button handling
+uint8_t lastButtonState = 0;
+uint8_t currentButtonState = 0;
+uint8_t lastDebounceTime = 0;
+
+// Optimize menu
+const uint8_t MENU_ITEMS = 2;
+const char* const menuItems[] PROGMEM = {"SNAKE", "UFO ATTACK"};
+uint8_t selectedMenuItem = 0;
+
+// Optimize game variables
+uint8_t snakeLength = 2;
+uint8_t snakeDirection = 0;
+uint8_t snakeSpeed = 1;
+int8_t foodX = 0;
+int8_t foodY = 0;
+
+uint8_t playerX = 0;
+uint8_t playerY = 0;
+uint8_t enemyCount = 0;
+uint8_t bulletCount = 0;
+
+// Game modes
+enum GameMode {
+  SNAKE_MODE,
+  UFO_MODE
+};
+
+// Game state structure
+struct GameStateData {
+  GameState mode;
+  uint8_t score;
+  uint8_t level;
+  uint8_t lives;
+  bool gameOver;
+  uint8_t highScore;
+} gameState = {MAIN_MENU, 0, 1, 5, false, 0};
+
+// Snake game structure
+struct SnakeGame {
+  int8_t x[MAX_SNAKE_LENGTH];
+  int8_t y[MAX_SNAKE_LENGTH];
+  uint8_t length;
+  uint8_t direction;
+  uint8_t score;
+  uint8_t speed;
+  bool gameOver;
+};
+
+// UFO game structure
+struct UFOGame {
+  int8_t shipX;
+  int8_t shipY;
+  int8_t bulletX[MAX_BULLETS];
+  int8_t bulletY[MAX_BULLETS];
+  int8_t enemyX[MAX_ENEMIES];
+  int8_t enemyY[MAX_ENEMIES];
+  uint8_t score;
+  uint8_t level;
+  uint8_t lives;
+  bool gameOver;
+};
+
+// Game state variables
+GameStateData gameStateData = {MAIN_MENU, 0, 1, 5, false, 0};
+SnakeGame snakeGame = {{0}, {0}, 2, 0, 0, 1, false};
+/*
+ * Arduino Gaming System - Main Controller
+ * Hardware: Arduino Uno/Nano, 16x2 LCD, 4x Max7219 LED Matrix, 5-button joystick, buzzer
+ * Communication: Serial to ESP8266 for web dashboard data
+ */
+
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Max72xxPanel.h>
+#include <LiquidCrystal.h>
+#include <EEPROM.h>
+#include <FastLED.h>
+
+// ===== HARDWARE CONFIGURATION =====
+#define NUM_LEDS 16
+#define LED_PIN 6
+#define JOYSTICK_X A0
+#define JOYSTICK_Y A1
+#define BUTTON_PIN 2
+#define MIC_PIN A2
+
+// LED control pins
+const int ledPins[NUM_LEDS] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, A3, A4, A5, 2, 3};
+
+// LED Matrix
+const int pinCS = 10;
+const int numberOfHorizontalDisplays = 4;
+const int numberOfVerticalDisplays = 1;
+
+// LCD (16x2)
+const int rs = 12, en = 11, d4 = 5, d5 = 4, d6 = 3, d7 = 2;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
+// Control pins
+const int up = 6;
+const int down = 7;
+const int left = 8;
+const int right = 9;
+const int trigger = A0;
+const int buzzerPin = A1;
+
+// Display setup
+Max72xxPanel matrix = Max72xxPanel(pinCS, numberOfHorizontalDisplays, numberOfVerticalDisplays);
+
+// LED Control Pins
+const int ledRedPin = A2;
+const int ledGreenPin = A3;
+const int ledBluePin = A4;
+
+// LED Control Variables
+struct LEDState {
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+  uint8_t brightness;
+  bool musicSync;
+  bool isOn;
+  uint8_t sensitivity;
+  String mode;
+} ledState = {0, 0, 0, 100, false, false, 50, "solid"};
+
+// LED State Persistence
+const int EEPROM_LED_STATE_ADDR = 512; // After game stats
+
+// Game Event LED Effects
+enum GameEvent {
+  EVENT_NONE,
+  EVENT_GAME_START,
+  EVENT_GAME_OVER,
+  EVENT_LEVEL_UP,
+  EVENT_BOSS_BATTLE,
+  EVENT_HIGH_SCORE,
+  EVENT_POWER_UP
+};
+
+GameEvent currentEvent = EVENT_NONE;
+unsigned long eventStartTime = 0;
+const unsigned long EVENT_DURATION = 2000; // 2 seconds
+
+// ===== SERIAL COMMUNICATION =====
+String serialBuffer = "";
+String lastWebCommand = "";
+unsigned long lastWebCommandTime = 0;
+unsigned long lastDataSend = 0;
+const unsigned long dataSendInterval = 1000; // Send data every second
+
+// ===== GAME STATE MANAGEMENT =====
+enum GameState {
+  MAIN_MENU,
+  GAME_MENU,
+  UFO_ATTACK_MODE,
+  SNAKE_GAME,
+  SETTINGS,
+  HIGH_SCORES,
+  PONG_GAME
+};
+
+GameState currentState = MAIN_MENU;
+uint8_t selectedMenuItem = 0;
+int menuSelection = 0;
+int maxMenuItems = 4;
+unsigned long lastInputTime = 0;
+const unsigned long inputDelay = 200;
+
+// ===== MENU SYSTEM =====
+struct MenuItem {
+  String name;
+  String description;
+};
+
+MenuItem mainMenu[] = {
+  {"Play Games", "Start gaming"},
+  {"High Scores", "View records"},
+  {"Settings", "Game options"},
+  {"About", "System info"}
+};
+
+MenuItem gameMenu[] = {
+  {"UFO Attack", "Space shooter"},
+  {"Snake Game", "Classic arcade"},
+  {"Pong", "Classic tennis"},
+  {"Back", "Return to main"}
+};
+
+// ===== HIGH SCORE SYSTEM =====
+struct HighScore {
+  char playerName[10];
+  int score;
+  char game[10];
+  unsigned long timestamp;
+};
+
+HighScore highScores[10];
+
+// ===== SPRITE DEFINITIONS =====
+const unsigned char ship[] PROGMEM = {
+  0x80, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char ufo[] PROGMEM = {
+  0x40, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char explosion[] PROGMEM = {
+  0xe0, 0xe0, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char boss[] PROGMEM = {
+  0x18, 0x24, 0x42, 0xff, 0x24, 0xff, 0x7e, 0x3c
+};
+
+// ===== UFO ATTACK VARIABLES =====
+bool ufoGameActive = false;
+bool ufoGameStart = false;
+
+int shipx = 0, shipy = 3;
+int lasx, lasy;
+bool lasExist = false;
+int lives = 5;
+int ufoScore = 0;
+int levelNumber = 1;
+int kills = 0, killsTarget = 10;
+
+struct Enemy {
+  int x, y;
+  bool exist;
+  int health;
+};
+
+Enemy ufos[3];
+Enemy bossEnemy;
+bool bossBattleStarted = false;
+int bossHealth = 10;
+
+unsigned long lastGameUpdate = 0;
+const unsigned long gameUpdateInterval = 50;
+unsigned long spawnTimer = 0;
+
+// ===== SNAKE GAME VARIABLES =====
+bool snakeGameActive = false;
+bool snakeGameStart = false;
+
+const int maxSnakeLength = 15;
+int snakeLength = 2;
+int snake[maxSnakeLength][2];
+int snakeDirection = 0;
+int food[2] = {0, 0};
+bool foodEaten = true;
+int snakeScore = 0;
+
+unsigned long lastSnakeUpdate = 0;
+unsigned long snakeUpdateInterval = 500;
+unsigned long lastSnakeInput = 0;
+const unsigned long snakeInputDelay = 100;
+
+byte snakeScene[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+// ===== STATISTICS =====
+struct GameStats {
+  unsigned long totalGamesPlayed;
+  unsigned long totalPlayTime;
+  unsigned long sessionStartTime;
+  int bestUFOScore;
+  int bestSnakeScore;
+};
+
+GameStats gameStats;
+
+// Microphone Module (4-pin: AO, G, +, DO)
+const int micPin = A5; // AO pin of microphone module to Arduino A5
+int micThreshold = 50; // Lower default threshold for better sensitivity
+const int SAMPLE_WINDOW = 50; // Sample window for beat detection
+int sampleBuffer[10]; // Buffer for smoothing
+int sampleIndex = 0;
+int sampleSum = 0;
+unsigned long lastBeatTime = 0;
+bool beatDetected = false;
+
+// Add new LED modes
+const char* ledModes[] = {"solid", "blink", "pulse", "rainbow", "music", "strobe", "wave", "colorcycle"};
+
+// Move constant strings to PROGMEM
+const char GAME_OVER[] PROGMEM = "GAME OVER";
+const char HIGH_SCORE[] PROGMEM = "HIGH SCORE";
+const char SCORE[] PROGMEM = "SCORE";
+const char LEVEL[] PROGMEM = "LEVEL";
+const char LIVES[] PROGMEM = "LIVES";
+const char MENU[] PROGMEM = "MENU";
+const char UFO_ATTACK[] PROGMEM = "UFO ATTACK";
+const char SNAKE[] PROGMEM = "SNAKE";
+const char LED_CONTROL[] PROGMEM = "LED_CONTROL";
+const char MUSIC_SYNC[] PROGMEM = "MUSIC_SYNC";
+
+// Reduce array sizes
+#define MAX_SNAKE_LENGTH 32  // Reduced from 64
+#define MAX_ENEMIES 8        // Reduced from 16
+#define MAX_BULLETS 4        // Reduced from 8
+#define SAMPLE_BUFFER_SIZE 16 // Reduced from 32
+
+// Use smaller data types for coordinates
+int8_t snakeX[MAX_SNAKE_LENGTH];
+int8_t snakeY[MAX_SNAKE_LENGTH];
+int8_t enemyX[MAX_ENEMIES];
+int8_t enemyY[MAX_ENEMIES];
+int8_t bulletX[MAX_BULLETS];
+int8_t bulletY[MAX_BULLETS];
+uint8_t sampleBuffer[SAMPLE_BUFFER_SIZE];  // Changed from uint16_t to uint8_t
+
+// Optimize timing variables
+uint16_t lastUpdate = 0;    // Changed from unsigned long
+uint16_t lastSpawn = 0;     // Changed from unsigned long
+uint16_t lastBeat = 0;      // Changed from unsigned long
+
+// Optimize button handling
+uint8_t lastButtonState = 0;
+uint8_t currentButtonState = 0;
+uint8_t lastDebounceTime = 0;
+
+// Optimize menu
+const uint8_t MENU_ITEMS = 2;
+const char* const menuItems[] PROGMEM = {"SNAKE", "UFO ATTACK"};
+uint8_t selectedMenuItem = 0;
+
+// Optimize game variables
+uint8_t snakeLength = 2;
+uint8_t snakeDirection = 0;
+uint8_t snakeSpeed = 1;
+int8_t foodX = 0;
+int8_t foodY = 0;
+
+uint8_t playerX = 0;
+uint8_t playerY = 0;
+uint8_t enemyCount = 0;
+uint8_t bulletCount = 0;
+
+// Game modes
+enum GameMode {
+  SNAKE_MODE,
+  UFO_MODE
+};
+
+// Game state structure
+struct GameStateData {
+  GameState mode;
+  uint8_t score;
+  uint8_t level;
+  uint8_t lives;
+  bool gameOver;
+  uint8_t highScore;
+} gameState = {MAIN_MENU, 0, 1, 5, false, 0};
+
+// Snake game structure
+struct SnakeGame {
+  int8_t x[MAX_SNAKE_LENGTH];
+  int8_t y[MAX_SNAKE_LENGTH];
+  uint8_t length;
+  uint8_t direction;
+  uint8_t speed;
+  int8_t foodX;
+  int8_t foodY;
+  bool gameOver;
+};
+
+// UFO game structure
+struct UFOGame {
+  int8_t shipX;
+  int8_t shipY;
+  int8_t bulletX[MAX_BULLETS];
+  int8_t bulletY[MAX_BULLETS];
+  int8_t enemyX[MAX_ENEMIES];
+  int8_t enemyY[MAX_ENEMIES];
+  uint8_t score;
+  uint8_t level;
+  uint8_t lives;
+  bool gameOver;
+};
+
+// Game state variables
+GameStateData gameStateData = {MAIN_MENU, 0, 1, 5, false, 0};
+SnakeGame snakeGame = {{0}, {0}, 2, 0, 1, 0, false};
+UFOGame ufoGame = {0, 0, {0}, {0}, {0}, {0}, 0, 1, 5, false};
+LEDState ledState = {255, 0, 0, 255, false, false, 50, "solid"};
+
+// Menu items
+const char* const menuItems[] PROGMEM = {"SNAKE", "UFO ATTACK"};
+uint8_t selectedMenuItem = 0;
+
+// Beat detection variables
+uint8_t sampleBuffer[SAMPLE_BUFFER_SIZE];
+uint8_t sampleIndex = 0;
+uint8_t averageLevel = 0;
+uint8_t threshold = 50;
+
+// Button handling
+uint8_t lastButtonState = 0;
+uint8_t currentButtonState = 0;
+uint8_t lastDebounceTime = 0;
+
+// Timing variables
+uint16_t lastUpdate = 0;
+uint16_t lastSpawn = 0;
+uint16_t lastBeat = 0;
+
+// LED control functions
+void setAllLEDs(uint8_t r, uint8_t g, uint8_t b) {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    analogWrite(ledPins[i], (r + g + b) / 3);  // Simple brightness control
+  }
+}
+
+void updateLED() {
+  if (!ledState.isOn) {
+    setAllLEDs(0, 0, 0);
+    return;
+  }
+
+  // Convert mode string to integer for switch statement
+  int modeIndex = 0;
+  for (int i = 0; i < sizeof(ledModes) / sizeof(ledModes[0]); i++) {
+    if (ledState.mode == ledModes[i]) {
+      modeIndex = i;
+      break;
+    }
+  }
+
+  switch (modeIndex) {
+    case 0: // solid
+      setAllLEDs(ledState.r, ledState.g, ledState.b);
+      break;
+    case 1: // blink
+      if (millis() % 1000 < 500) {
+        setAllLEDs(ledState.r, ledState.g, ledState.b);
+      } else {
+        setAllLEDs(0, 0, 0);
+      }
+      break;
+    case 2: // pulse
+      {
+        uint8_t brightness = (sin(millis() / 1000.0 * PI) + 1) * 127;
+        setAllLEDs(
+          ledState.r * brightness / 255,
+          ledState.g * brightness / 255,
+          ledState.b * brightness / 255
+        );
+      }
+      break;
+    case 3: // rainbow
+      {
+        uint8_t hue = millis() / 20;
+        for (int i = 0; i < NUM_LEDS; i++) {
+          setLEDColor(i, hue + i * 16, 255, ledState.brightness);
+        }
+      }
+      break;
+    case 4: // music
+      if (ledState.musicSync) {
+        updateMusicSync();
+      }
+      break;
+    default:
+      setAllLEDs(ledState.r, ledState.g, ledState.b);
+      break;
+  }
+}
+
 // ===== SETUP =====
 void setup() {
+  // Initialize serial communication
   Serial.begin(9600);
   
-  // Initialize EEPROM
-  loadHighScores();
-  loadGameStats();
+  // Initialize display
+  matrix.setIntensity(7);
+  matrix.fillScreen(LOW);
+  matrix.write();
   
-  // Initialize pins
+  // Initialize LCD
+  lcd.begin(16, 2);
+  lcd.clear();
+  lcd.print("Gaming System");
+  lcd.setCursor(0, 1);
+  lcd.print("Starting...");
+  
+  // Initialize LED pins
+  for (int i = 0; i < NUM_LEDS; i++) {
+    pinMode(ledPins[i], OUTPUT);
+  }
+  
+  // Initialize control pins
   pinMode(up, INPUT_PULLUP);
   pinMode(down, INPUT_PULLUP);
   pinMode(left, INPUT_PULLUP);
@@ -204,39 +752,76 @@ void setup() {
   pinMode(trigger, INPUT_PULLUP);
   pinMode(buzzerPin, OUTPUT);
   
-  // Initialize LCD
-  lcd.begin(16, 2);
-  lcd.clear();
-  lcd.print("ARCADE SYSTEM");
-  lcd.setCursor(0, 1);
-  lcd.print("Initializing...");
-  
-  // Initialize LED Matrix
-  matrix.setIntensity(2);
-  matrix.setPosition(0, 3, 0);
-  matrix.setPosition(1, 2, 0);
-  matrix.setPosition(2, 1, 0);
-  matrix.setPosition(3, 0, 0);
-  matrix.setRotation(0, 3);
-  matrix.setRotation(1, 3);
-  matrix.setRotation(2, 3);
-  matrix.setRotation(3, 3);
-  matrix.fillScreen(LOW);
-  
-  // Welcome animation
-  welcomeAnimation();
-  
+  // Initialize game state
   currentState = MAIN_MENU;
-  maxMenuItems = 4;
-  menuSelection = 0;
+  selectedMenuItem = 0;
   
-  updateLCDMenu();
+  // Initialize snake game
+  memset(snakeGame.x, 0, sizeof(snakeGame.x));
+  memset(snakeGame.y, 0, sizeof(snakeGame.y));
+  snakeGame.length = 2;
+  snakeGame.direction = 0;
+  snakeGame.score = 0;
+  snakeGame.speed = 1;
+  snakeGame.gameOver = false;
   
-  // Send ready signal to ESP8266
-  Serial.println("ARDUINO_READY");
+  // Initialize UFO game
+  ufoGame.shipX = 0;
+  ufoGame.shipY = 0;
+  memset(ufoGame.bulletX, 0, sizeof(ufoGame.bulletX));
+  memset(ufoGame.bulletY, 0, sizeof(ufoGame.bulletY));
+  memset(ufoGame.enemyX, 0, sizeof(ufoGame.enemyX));
+  memset(ufoGame.enemyY, 0, sizeof(ufoGame.enemyY));
+  ufoGame.score = 0;
+  ufoGame.level = 1;
+  ufoGame.lives = 3;
+  ufoGame.gameOver = false;
   
-  setupLED();
+  // Initialize power state
+  power.isSleeping = false;
+  power.lastActivity = millis();
+  
+  // Initialize game flags
+  pongGameActive = false;
+  ufoGameActive = false;
+  snakeGameActive = false;
+  
+  // Initialize LED state
+  ledState.r = 0;
+  ledState.g = 0;
+  ledState.b = 0;
+  ledState.brightness = 100;
+  ledState.musicSync = false;
+  ledState.isOn = false;
+  ledState.sensitivity = 50;
+  ledState.mode = "solid";
+  
+  // Initialize sample buffer
+  memset(sampleBuffer, 0, sizeof(sampleBuffer));
+  sampleIndex = 0;
+  averageLevel = 0;
+  threshold = 50;
+  
+  // Initialize button state
+  lastButtonState = 0;
+  currentButtonState = 0;
+  lastDebounceTime = 0;
+  
+  // Initialize timing variables
+  lastUpdate = 0;
+  lastSpawn = 0;
+  lastBeat = 0;
+  
+  // Load saved state
   loadLEDState();
+  loadGameStats();
+  
+  // Show welcome message
+  lcd.clear();
+  lcd.print("Gaming System");
+  lcd.setCursor(0, 1);
+  lcd.print("Ready!");
+  delay(1000);
 }
 
 // ===== MAIN LOOP =====
@@ -255,7 +840,7 @@ void loop() {
     case GAME_MENU:
       handleGameMenu();
       break;
-    case UFO_ATTACK:
+    case UFO_ATTACK_MODE:
       runUFOAttack();
       break;
     case SNAKE_GAME:
@@ -266,6 +851,12 @@ void loop() {
       break;
     case HIGH_SCORES:
       handleHighScores();
+      break;
+    case PONG_GAME:
+      if (!pongGameActive) {
+        startPong();
+      }
+      updatePong();
       break;
   }
   
@@ -280,6 +871,18 @@ void loop() {
   
   // Update LED effects
   updateLED();
+  
+  // Update music sync
+  updateMusicSync();
+  
+  // Update power management
+  updatePowerManagement();
+  
+  // Skip main loop if sleeping
+  if (power.isSleeping) {
+    delay(100);
+    return;
+  }
 }
 
 // ===== SERIAL COMMUNICATION =====
@@ -423,7 +1026,7 @@ void processInput(int pin, bool isPhysical) {
     case GAME_MENU:
       handleGameMenuInput(pin);
       break;
-    case UFO_ATTACK:
+    case UFO_ATTACK_MODE:
       handleUFOInput(pin);
       break;
     case SNAKE_GAME:
@@ -620,7 +1223,7 @@ void selectGameMenuItem() {
   
   switch (menuSelection) {
     case 0: // UFO Attack
-      currentState = UFO_ATTACK;
+      currentState = UFO_ATTACK_MODE;
       initUFOAttack();
       gameStats.totalGamesPlayed++;
       gameStats.sessionStartTime = millis();
@@ -631,7 +1234,10 @@ void selectGameMenuItem() {
       gameStats.totalGamesPlayed++;
       gameStats.sessionStartTime = millis();
       break;
-    case 2: // Back
+    case 2: // Pong
+      currentState = PONG_GAME;
+      break;
+    case 3: // Back
       currentState = MAIN_MENU;
       maxMenuItems = 4;
       menuSelection = 0;
@@ -1257,143 +1863,6 @@ void handleLEDCommand(String command) {
   }
 }
 
-void updateLED() {
-  if (!ledState.isOn && currentEvent == EVENT_NONE) {
-    analogWrite(ledRedPin, 0);
-    analogWrite(ledGreenPin, 0);
-    analogWrite(ledBluePin, 0);
-    return;
-  }
-
-  // Handle game events
-  if (currentEvent != EVENT_NONE) {
-    if (millis() - eventStartTime > EVENT_DURATION) {
-      currentEvent = EVENT_NONE;
-    } else {
-      switch (currentEvent) {
-        case EVENT_GAME_START:
-          // Flash white
-          analogWrite(ledRedPin, 255);
-          analogWrite(ledGreenPin, 255);
-          analogWrite(ledBluePin, 255);
-          break;
-        case EVENT_GAME_OVER:
-          // Flash red
-          analogWrite(ledRedPin, 255);
-          analogWrite(ledGreenPin, 0);
-          analogWrite(ledBluePin, 0);
-          break;
-        case EVENT_LEVEL_UP:
-          // Flash green
-          analogWrite(ledRedPin, 0);
-          analogWrite(ledGreenPin, 255);
-          analogWrite(ledBluePin, 0);
-          break;
-        case EVENT_BOSS_BATTLE:
-          // Flash purple
-          analogWrite(ledRedPin, 255);
-          analogWrite(ledGreenPin, 0);
-          analogWrite(ledBluePin, 255);
-          break;
-        case EVENT_HIGH_SCORE:
-          // Flash gold
-          analogWrite(ledRedPin, 255);
-          analogWrite(ledGreenPin, 215);
-          analogWrite(ledBluePin, 0);
-          break;
-        case EVENT_POWER_UP:
-          // Flash blue
-          analogWrite(ledRedPin, 0);
-          analogWrite(ledGreenPin, 0);
-          analogWrite(ledBluePin, 255);
-          break;
-      }
-      return;
-    }
-  }
-
-  // Normal LED operation continues...
-  // Calculate brightness-adjusted values
-  float brightness = ledState.brightness / 100.0;
-  int r = ledState.r * brightness;
-  int g = ledState.g * brightness;
-  int b = ledState.b * brightness;
-
-  // Apply mode-specific effects
-  if (ledState.mode == "blink") {
-    static bool blinkState = false;
-    static unsigned long lastBlink = 0;
-    if (millis() - lastBlink > 500) {
-      blinkState = !blinkState;
-      lastBlink = millis();
-    }
-    if (!blinkState) {
-      r = g = b = 0;
-    }
-  }
-  else if (ledState.mode == "pulse") {
-    static unsigned long lastPulse = 0;
-    static int pulseValue = 0;
-    static bool increasing = true;
-    
-    if (millis() - lastPulse > 20) {
-      lastPulse = millis();
-      if (increasing) {
-        pulseValue += 5;
-        if (pulseValue >= 100) {
-          pulseValue = 100;
-          increasing = false;
-        }
-      } else {
-        pulseValue -= 5;
-        if (pulseValue <= 0) {
-          pulseValue = 0;
-          increasing = true;
-        }
-      }
-    }
-    
-    float pulseBrightness = pulseValue / 100.0;
-    r *= pulseBrightness;
-    g *= pulseBrightness;
-    b *= pulseBrightness;
-  }
-  else if (ledState.mode == "rainbow") {
-    static unsigned long lastRainbow = 0;
-    static int hue = 0;
-    
-    if (millis() - lastRainbow > 50) {
-      lastRainbow = millis();
-      hue = (hue + 1) % 360;
-    }
-    
-    // Convert HSV to RGB
-    float h = hue / 60.0;
-    float s = 1.0;
-    float v = brightness;
-    
-    float c = v * s;
-    float x = c * (1 - abs(fmod(h, 2) - 1));
-    float m = v - c;
-    
-    if (h < 1) { r = c; g = x; b = 0; }
-    else if (h < 2) { r = x; g = c; b = 0; }
-    else if (h < 3) { r = 0; g = c; b = x; }
-    else if (h < 4) { r = 0; g = x; b = c; }
-    else if (h < 5) { r = x; g = 0; b = c; }
-    else { r = c; g = 0; b = x; }
-    
-    r = (r + m) * 255;
-    g = (g + m) * 255;
-    b = (b + m) * 255;
-  }
-
-  // Write to LED pins
-  analogWrite(ledRedPin, r);
-  analogWrite(ledGreenPin, g);
-  analogWrite(ledBluePin, b);
-}
-
 void saveLEDState() {
   EEPROM.put(EEPROM_LED_STATE_ADDR, ledState);
 }
@@ -1406,7 +1875,7 @@ void loadLEDState() {
       ledState.b < 0 || ledState.b > 255 ||
       ledState.brightness < 0 || ledState.brightness > 100) {
     // Reset to default if invalid
-    ledState = {0, 0, 0, 100, "solid", false};
+    ledState = {0, 0, 0, 100, false, false, 50, "solid"};
   }
   updateLED();
 }
@@ -1415,3 +1884,298 @@ void triggerGameEvent(GameEvent event) {
   currentEvent = event;
   eventStartTime = millis();
 }
+
+// Optimize detectBeat function
+bool detectBeat() {
+  if (!ledState.musicSync) return false;
+  
+  uint16_t currentLevel = analogRead(micPin);
+  sampleBuffer[sampleIndex] = currentLevel;
+  sampleIndex = (sampleIndex + 1) % SAMPLE_BUFFER_SIZE;
+  
+  // Calculate average
+  uint32_t sum = 0;
+  for (uint8_t i = 0; i < SAMPLE_BUFFER_SIZE; i++) {
+    sum += sampleBuffer[i];
+  }
+  uint16_t averageLevel = sum / SAMPLE_BUFFER_SIZE;
+  
+  // Dynamic threshold
+  uint16_t dynamicThreshold = averageLevel + (ledState.sensitivity * 2);
+  
+  // Beat detection
+  if (currentLevel > dynamicThreshold && 
+      (millis() - lastBeatTime) > 100) {  // Minimum 100ms between beats
+    lastBeatTime = millis();
+    return true;
+  }
+  
+  return false;
+}
+
+// ===== PONG GAME VARIABLES =====
+bool pongGameActive = false;
+bool pongGameStart = false;
+
+struct PongGame {
+  int8_t paddle1Y;
+  int8_t paddle2Y;
+  int8_t ballX;
+  int8_t ballY;
+  int8_t ballDirX;
+  int8_t ballDirY;
+  int8_t score1;
+  int8_t score2;
+  uint8_t speed;
+} pong;
+
+void updatePong() {
+  if (!pongGameActive) return;
+  
+  // Move paddles based on joystick input
+  int joystickY = analogRead(JOYSTICK_Y);
+  if (joystickY < 400) pong.paddle1Y = max(0, pong.paddle1Y - 1);
+  if (joystickY > 600) pong.paddle1Y = min(7, pong.paddle1Y + 1);
+  
+  // AI for paddle2
+  if (pong.ballY < pong.paddle2Y) pong.paddle2Y = max(0, pong.paddle2Y - 1);
+  if (pong.ballY > pong.paddle2Y) pong.paddle2Y = min(7, pong.paddle2Y + 1);
+  
+  // Move ball
+  pong.ballX += pong.ballDirX;
+  pong.ballY += pong.ballDirY;
+  
+  // Ball collision with top and bottom
+  if (pong.ballY <= 0 || pong.ballY >= 7) {
+    pong.ballDirY *= -1;
+    playTone(200, 50);
+  }
+  
+  // Ball collision with paddles
+  if (pong.ballX == 0 && pong.ballY >= pong.paddle1Y && pong.ballY <= pong.paddle1Y + 2) {
+    pong.ballDirX *= -1;
+    playTone(300, 50);
+  }
+  if (pong.ballX == 31 && pong.ballY >= pong.paddle2Y && pong.ballY <= pong.paddle2Y + 2) {
+    pong.ballDirX *= -1;
+    playTone(300, 50);
+  }
+  
+  // Scoring
+  if (pong.ballX < 0) {
+    pong.score2++;
+    resetPongBall();
+    playTone(100, 200);
+  }
+  if (pong.ballX > 31) {
+    pong.score1++;
+    resetPongBall();
+    playTone(100, 200);
+  }
+  
+  // Update display
+  matrix.fillScreen(LOW);
+  
+  // Draw paddles
+  for (int i = 0; i < 3; i++) {
+    matrix.drawPixel(0, pong.paddle1Y + i, HIGH);
+    matrix.drawPixel(31, pong.paddle2Y + i, HIGH);
+  }
+  
+  // Draw ball
+  matrix.drawPixel(pong.ballX, pong.ballY, HIGH);
+  
+  // Draw score
+  drawNumber(pong.score1, 8, 0);
+  drawNumber(pong.score2, 24, 0);
+  
+  matrix.write();
+  
+  // Check for game over
+  if (pong.score1 >= 5 || pong.score2 >= 5) {
+    pongGameActive = false;
+    currentState = GAME_MENU;
+    showGameOver();
+  }
+}
+
+void resetPongBall() {
+  pong.ballX = 16;
+  pong.ballY = random(1, 7);
+  pong.ballDirX = (random(2) == 0) ? -1 : 1;
+  pong.ballDirY = (random(2) == 0) ? -1 : 1;
+}
+
+void startPong() {
+  pongGameActive = true;
+  pong.paddle1Y = 3;
+  pong.paddle2Y = 3;
+  pong.score1 = 0;
+  pong.score2 = 0;
+  pong.speed = 1;
+  resetPongBall();
+  triggerGameEvent(EVENT_GAME_START);
+}
+
+// Enhanced Music Sync Variables
+const int BEAT_THRESHOLD = 30;
+const int BEAT_HOLD_TIME = 150;
+const int BEAT_DECAY_RATE = 2;
+const int MIN_BEAT_INTERVAL = 200;
+
+struct MusicSync {
+  int beatValue;
+  int beatThreshold;
+  unsigned long lastBeatTime;
+  bool beatDetected;
+  int energyLevel;
+  int peakEnergy;
+  uint8_t colorIndex;
+} musicSync = {0, BEAT_THRESHOLD, 0, false, 0, 0, 0};
+
+void updateMusicSync() {
+  // Read microphone value
+  int micValue = analogRead(MIC_PIN);
+  
+  // Calculate energy level
+  musicSync.energyLevel = (musicSync.energyLevel * 7 + abs(micValue - 512)) / 8;
+  
+  // Update peak energy
+  if (musicSync.energyLevel > musicSync.peakEnergy) {
+    musicSync.peakEnergy = musicSync.energyLevel;
+  } else {
+    musicSync.peakEnergy = max(0, musicSync.peakEnergy - BEAT_DECAY_RATE);
+  }
+  
+  // Beat detection
+  unsigned long currentTime = millis();
+  if (musicSync.energyLevel > musicSync.beatThreshold && 
+      currentTime - musicSync.lastBeatTime > MIN_BEAT_INTERVAL) {
+    musicSync.beatDetected = true;
+    musicSync.lastBeatTime = currentTime;
+    musicSync.beatValue = 255;
+    musicSync.colorIndex = (musicSync.colorIndex + 1) % 255;
+    
+    // Trigger LED effect
+    triggerGameEvent(EVENT_POWER_UP);
+  }
+  
+  // Update LED colors based on music
+  if (ledState.mode == "music") {
+    // Calculate color based on energy level
+    uint8_t hue = map(musicSync.energyLevel, 0, 1023, 0, 255);
+    uint8_t brightness = map(musicSync.beatValue, 0, 255, 50, 255);
+    
+    // Apply color to LEDs
+    for (int i = 0; i < NUM_LEDS; i++) {
+      uint8_t ledHue = (hue + (i * 16)) % 255;
+      setLEDColor(i, ledHue, 255, brightness);
+    }
+    
+    // Decay beat value
+    if (musicSync.beatValue > 0) {
+      musicSync.beatValue = max(0, musicSync.beatValue - 5);
+    }
+  }
+}
+
+// ===== POWER MANAGEMENT =====
+struct PowerState {
+  bool isSleeping;
+  unsigned long lastActivity;
+} power = {false, 0};
+
+void updatePowerManagement() {
+  unsigned long currentTime = millis();
+  
+  // Check for user activity
+  if (digitalRead(BUTTON_PIN) == LOW || 
+      analogRead(JOYSTICK_X) < 400 || 
+      analogRead(JOYSTICK_X) > 600 ||
+      analogRead(JOYSTICK_Y) < 400 || 
+      analogRead(JOYSTICK_Y) > 600) {
+    power.lastActivity = currentTime;
+    if (power.isSleeping) {
+      wakeUp();
+    }
+  }
+  
+  // Check for sleep timeout
+  if (!power.isSleeping && 
+      currentTime - power.lastActivity > 300000) {
+    enterSleep();
+  }
+  
+  // Check battery level if analog pin is available
+  #ifdef BATTERY_PIN
+    int batteryLevel = analogRead(BATTERY_PIN);
+    if (batteryLevel < 700) { // Low battery threshold
+      // Reduce brightness
+      matrix.setIntensity(0);
+    } else {
+      matrix.setIntensity(7);
+    }
+  #endif
+}
+
+void enterSleep() {
+  // Save state before sleeping
+  saveGameState();
+  
+  // Turn off all LEDs
+  for (int i = 0; i < NUM_LEDS; i++) {
+    setLEDColor(i, 0, 0, 0);
+  }
+  
+  // Disable all peripherals
+  matrix.setIntensity(0);
+  lcd.noDisplay();
+  
+  // Enter low power mode
+  power.isSleeping = true;
+}
+
+void wakeUp() {
+  // Exit low power mode
+  power.isSleeping = false;
+  
+  // Restore state after waking up
+  loadLEDState();
+  
+  // Re-enable peripherals
+  matrix.setIntensity(7);
+  lcd.display();
+}
+
+void playTone(int frequency, int duration) {
+  tone(buzzerPin, frequency, duration);
+}
+
+void drawNumber(int number, int x, int y) {
+  char buffer[4];
+  sprintf(buffer, "%d", number);
+  matrix.drawChar(x, y, buffer[0], HIGH, LOW, 1);
+  if (number >= 10) {
+    matrix.drawChar(x + 6, y, buffer[1], HIGH, LOW, 1);
+  }
+}
+
+void showGameOver() {
+  matrix.fillScreen(LOW);
+  matrix.drawChar(4, 0, 'G', HIGH, LOW, 1);
+  matrix.drawChar(10, 0, 'O', HIGH, LOW, 1);
+  matrix.write();
+  delay(1000);
+}
+
+void setLEDColor(int index, uint8_t hue, uint8_t saturation, uint8_t brightness) {
+  if (index >= 0 && index < NUM_LEDS) {
+    analogWrite(ledPins[index], brightness);
+  }
+}
+
+void saveGameState() {
+  EEPROM.put(EEPROM_LED_STATE_ADDR, ledState);
+  EEPROM.put(EEPROM_LED_STATE_ADDR + sizeof(LEDState), gameStats);
+}
+
