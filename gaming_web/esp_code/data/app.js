@@ -31,7 +31,6 @@ class GameDashboard {
     this.setupEventListeners()
     this.initializeWebSocket()
     this.checkConnection()
-    this.updateRefreshRateDisplay()
     this.updateConnectionStatus(false)
 
     console.log("Arduino Gaming Dashboard initialized")
@@ -53,23 +52,13 @@ class GameDashboard {
     // Keyboard controls
     document.addEventListener("keydown", (e) => this.handleKeyboard(e))
 
-    // Settings
-    const refreshRateSlider = document.getElementById("refreshRate")
-    if (refreshRateSlider) {
-      refreshRateSlider.addEventListener("input", (e) => {
-        this.refreshRate = Number.parseInt(e.target.value)
-        this.updateRefreshRateDisplay()
-        this.startDataRefresh()
-      })
-    }
-
     // Window events
     window.addEventListener("beforeunload", () => this.saveSettings())
   }
 
   initializeWebSocket() {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-    const wsUrl = `${protocol}//${window.location.host}/ws`
+    const wsUrl = `${protocol}//${window.location.hostname}:81/`
 
     this.ws = new WebSocket(wsUrl)
 
@@ -145,29 +134,12 @@ class GameDashboard {
     }
   }
 
-  startDataRefresh() {
-    if (this.refreshInterval) {
-      clearInterval(this.refreshInterval)
-    }
-
-    if (this.autoRefresh) {
-      this.refreshInterval = setInterval(() => {
-        this.fetchGameData()
-        this.fetchHighScores()
-      }, this.refreshRate)
-
-      this.fetchGameData()
-      this.fetchHighScores()
-    }
-  }
-
   async fetchGameData() {
     try {
       const response = await fetch("/api/gamedata")
       if (response.ok) {
         const data = await response.json()
         this.updateGameData(data)
-        this.updateLastUpdateTime()
       }
     } catch (error) {
       console.error("Failed to fetch game data:", error)
@@ -304,23 +276,11 @@ class GameDashboard {
       })
 
       if (response.ok) {
-        this.showControlFeedback(action)
         this.playSound("button")
       }
     } catch (error) {
       console.error("Control command failed:", error)
     }
-  }
-
-  showControlFeedback(action) {
-    const statusElement = document.getElementById("controlsStatus")
-    statusElement.textContent = `Sent: ${action.toUpperCase()}`
-    statusElement.style.color = "#4CAF50"
-
-    setTimeout(() => {
-      statusElement.textContent = "Ready"
-      statusElement.style.color = ""
-    }, 1000)
   }
 
   handleKeyboard(event) {
@@ -371,20 +331,6 @@ class GameDashboard {
     return `${mb.toFixed(1)} MB`
   }
 
-  updateLastUpdateTime() {
-    const lastUpdateEl = document.getElementById("lastUpdate")
-    if (lastUpdateEl) {
-      lastUpdateEl.textContent = new Date().toLocaleTimeString()
-    }
-  }
-
-  updateRefreshRateDisplay() {
-    const refreshRateValueEl = document.getElementById("refreshRateValue")
-    if (refreshRateValueEl) {
-      refreshRateValueEl.textContent = this.refreshRate + "ms"
-    }
-  }
-
   playSound(type) {
     if (!this.soundEnabled) return
 
@@ -423,20 +369,6 @@ class GameDashboard {
         this.refreshRate = parsed.refreshRate || 2000
         this.soundEnabled = parsed.soundEnabled !== false
         this.autoRefresh = parsed.autoRefresh !== false
-
-        const refreshRateEl = document.getElementById("refreshRate")
-        const soundEnabledEl = document.getElementById("soundEnabled")
-        const autoRefreshEl = document.getElementById("autoRefresh")
-        const darkModeEl = document.getElementById("darkMode")
-
-        if (refreshRateEl) refreshRateEl.value = this.refreshRate
-        if (soundEnabledEl) soundEnabledEl.checked = this.soundEnabled
-        if (autoRefreshEl) autoRefreshEl.checked = this.autoRefresh
-
-        if (parsed.darkMode && darkModeEl) {
-          document.body.classList.add("dark-mode")
-          darkModeEl.checked = true
-        }
       } catch (error) {
         console.warn("Failed to load settings:", error)
       }
@@ -448,7 +380,6 @@ class GameDashboard {
       refreshRate: this.refreshRate,
       soundEnabled: this.soundEnabled,
       autoRefresh: this.autoRefresh,
-      darkMode: document.body.classList.contains("dark-mode"),
     }
     localStorage.setItem("gameDashboardSettings", JSON.stringify(settings))
   }
@@ -500,28 +431,7 @@ class LEDController {
   }
 
   updateLED() {
-    const preview = document.getElementById("ledPreview")
-    const status = document.getElementById("ledStatus")
-    const currentMode = document.getElementById("currentMode")
-    const gameSyncStatus = document.getElementById("gameSyncStatus")
-
-    // Update LED preview
-    preview.style.backgroundColor = this.color
-    preview.style.boxShadow = `0 0 20px ${this.color}`
-    preview.style.opacity = this.isOn ? this.brightness / 255 : 0
-
-    // Update classes
-    preview.className = "led-light"
-    if (this.isOn) {
-      preview.classList.add(this.mode)
-    }
-
-    // Update status text
-    status.textContent = this.isOn ? "On" : "Off"
-    currentMode.textContent = this.mode.charAt(0).toUpperCase() + this.mode.slice(1)
-    gameSyncStatus.textContent = this.gameSync ? "On" : "Off"
-
-    // Send to Arduino
+    this.updateInfo()
     this.sendToArduino()
   }
 
@@ -585,69 +495,9 @@ class LEDController {
 // Global Functions
 let dashboard
 
-function updateRefreshRate() {
-  const value = document.getElementById("refreshRate").value
-  dashboard.refreshRate = Number.parseInt(value)
-  dashboard.updateRefreshRateDisplay()
-  dashboard.startDataRefresh()
-}
-
-function toggleSound() {
-  dashboard.soundEnabled = document.getElementById("soundEnabled").checked
-  if (dashboard.soundEnabled) {
-    dashboard.playSound("button")
-  }
-}
-
-function toggleDarkMode() {
-  document.body.classList.toggle("dark-mode")
-  dashboard.saveSettings()
-}
-
-function toggleAutoRefresh() {
-  dashboard.autoRefresh = document.getElementById("autoRefresh").checked
-  dashboard.startDataRefresh()
-}
-
-function saveSettings() {
-  dashboard.saveSettings()
-  dashboard.playSound("button")
-
-  const btn = event.target
-  const originalText = btn.innerHTML
-  btn.innerHTML = '<i class="fas fa-check"></i> Saved!'
-  btn.style.background = "#4CAF50"
-
-  setTimeout(() => {
-    btn.innerHTML = originalText
-    btn.style.background = ""
-  }, 2000)
-}
-
-function resetSettings() {
-  if (confirm("Reset all settings to default?")) {
-    localStorage.removeItem("gameDashboardSettings")
-    location.reload()
-  }
-}
-
-function showScores(filter) {
-  dashboard.currentScoreFilter = filter
-  dashboard.updateHighScoresDisplay()
-
-  document.querySelectorAll(".tab-btn").forEach((btn) => btn.classList.remove("active"))
-  event.target.classList.add("active")
-}
-
 function refreshHighScores() {
   dashboard.fetchHighScores()
   dashboard.playSound("button")
-}
-
-function showAbout() {
-  alert(
-    "Arduino Gaming System v2.0\n\nFeatures:\n- 3 Classic Games\n- RGB LED Control\n- Web Dashboard\n- Real-time Monitoring",
-  )
 }
 
 // Initialize dashboard when page loads
