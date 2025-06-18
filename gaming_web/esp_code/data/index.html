@@ -11,7 +11,6 @@
     <!-- AUTH MODAL -->
     <div id="authModal" class="modal" style="display:none;">
       <div class="modal-content">
-        <span class="close" id="closeAuthModal">&times;</span>
         <h2 id="authTitle">Login</h2>
         <form id="authForm">
           <div class="form-group">
@@ -28,17 +27,24 @@
         <div style="margin-top:18px;">
           <span id="toggleAuthMode">Don't have an account? <a href="#" id="showRegister">Register</a></span>
         </div>
+        <div style="margin-top:24px;text-align:center;">
+          <button id="guestBtn" class="btn" style="background:var(--accent-color);color:#fff;">Continue as Guest</button>
+        </div>
       </div>
     </div>
     <!-- END AUTH MODAL -->
 
-    <div class="container">
+    <div class="container" id="dashboardContainer">
         <header class="header">
             <div class="header-content">
                 <h1><i class="fas fa-gamepad"></i> Arduino Gaming System</h1>
                 <div class="status-indicator">
                     <span class="status-dot" id="connectionStatus"></span>
                     <span id="connectionText">Connecting...</span>
+                </div>
+                <div id="userControls" style="display:none;">
+                  <span id="welcomeUser" style="margin-right:12px;"></span>
+                  <button id="logoutBtn" class="btn" style="padding:6px 18px;font-size:1em;">Logout</button>
                 </div>
             </div>
         </header>
@@ -231,10 +237,13 @@
     </div>
     <script src="app.js"></script>
     <script>
-      // Show auth modal on load if not logged in
+      // Show auth modal on load if not logged in or guest, and blur dashboard
       document.addEventListener('DOMContentLoaded', function() {
-        if (!localStorage.getItem('sessionToken')) {
+        if (!localStorage.getItem('sessionToken') && !localStorage.getItem('isGuest')) {
           document.getElementById('authModal').style.display = 'block';
+          document.getElementById('dashboardContainer').classList.add('modal-blur');
+        } else {
+          document.getElementById('dashboardContainer').classList.remove('modal-blur');
         }
       });
     </script>

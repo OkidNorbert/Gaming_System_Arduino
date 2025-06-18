@@ -25,6 +25,7 @@ class GameDashboard {
 
     this.sessionToken = localStorage.getItem('sessionToken') || null
     this.username = localStorage.getItem('username') || null
+    this.isGuest = localStorage.getItem('isGuest') === '1'
     this.init()
   }
 
@@ -40,15 +41,16 @@ class GameDashboard {
 
   setupAuth() {
     const authModal = document.getElementById('authModal')
-    const closeBtn = document.getElementById('closeAuthModal')
     const authForm = document.getElementById('authForm')
     const authTitle = document.getElementById('authTitle')
     const authError = document.getElementById('authError')
     const showRegister = document.getElementById('showRegister')
+    const guestBtn = document.getElementById('guestBtn')
     let isRegister = false
-    // Show login/register modal if not logged in
-    if (!this.sessionToken) authModal.style.display = 'block'
-    closeBtn.onclick = () => { authModal.style.display = 'none' }
+    // Show login/register modal if not logged in or guest
+    if (!this.sessionToken && !this.isGuest) authModal.style.display = 'block'
+    // Remove close button logic (force login)
+    // closeBtn.onclick = () => { authModal.style.display = 'none' }
     showRegister.onclick = (e) => {
       e.preventDefault()
       isRegister = !isRegister
@@ -93,12 +95,44 @@ class GameDashboard {
           this.username = username
           localStorage.setItem('sessionToken', data.token)
           localStorage.setItem('username', username)
+          this.isGuest = false
+          localStorage.removeItem('isGuest')
           authModal.style.display = 'none'
+          this.updateUserControls()
+          this.fetchHighScores()
           this.playSound('connect')
         }
       } catch (err) {
         authError.textContent = err.message
       }
+    }
+    guestBtn.onclick = () => {
+      this.isGuest = true
+      localStorage.setItem('isGuest', '1')
+      this.sessionToken = null
+      this.username = null
+      localStorage.removeItem('sessionToken')
+      localStorage.removeItem('username')
+      authModal.style.display = 'none'
+      this.updateUserControls()
+      this.fetchHighScores()
+    }
+    // Hide user controls if not logged in
+    this.updateUserControls()
+  }
+
+  updateUserControls() {
+    const userControls = document.getElementById('userControls')
+    const welcomeUser = document.getElementById('welcomeUser')
+    if (this.sessionToken && this.username) {
+      userControls.style.display = 'flex'
+      welcomeUser.textContent = `Welcome, ${this.username}`
+    } else if (this.isGuest) {
+      userControls.style.display = 'flex'
+      welcomeUser.textContent = `Welcome, Guest`
+    } else {
+      userControls.style.display = 'none'
+      welcomeUser.textContent = ''
     }
   }
 
@@ -265,16 +299,15 @@ class GameDashboard {
 
   async fetchHighScores() {
     try {
-      const response = await fetch("/api/highscores", {
-        headers: this.sessionToken ? { 'Authorization': this.sessionToken } : {}
+      const resp = await fetch('/api/highscores', {
+        headers: this.sessionToken ? { 'Authorization': 'Bearer ' + this.sessionToken } : {},
       })
-      if (response.ok) {
-        const data = await response.json()
-        this.highScores = data.scores || []
-        this.updateHighScoresDisplay()
-      }
-    } catch (error) {
-      console.error("Failed to fetch high scores:", error)
+      if (!resp.ok) throw new Error('Failed to fetch high scores')
+      const data = await resp.json()
+      this.highScores = data.highScores || []
+      this.renderHighScores()
+    } catch (err) {
+      document.getElementById('highScoresTable').textContent = 'Unable to load high scores.'
     }
   }
 
@@ -574,11 +607,14 @@ function refreshHighScores() {
 // Initialize dashboard when page loads
 document.addEventListener("DOMContentLoaded", () => {
   dashboard = new GameDashboard()
+  // Attach logout button event
+  const logoutBtn = document.getElementById('logoutBtn')
+  if (logoutBtn) {
+    logoutBtn.onclick = function() {
+      localStorage.removeItem('sessionToken')
+      localStorage.removeItem('username')
+      localStorage.removeItem('isGuest')
+      location.reload()
+    }
+  }
 })
-
-// Add logout button (optional)
-window.logout = function() {
-  localStorage.removeItem('sessionToken')
-  localStorage.removeItem('username')
-  location.reload()
-}
