@@ -1,6 +1,6 @@
 #include <LiquidCrystal.h>
 #include <EEPROM.h>
-#include <SoftwareSerial.h>
+// #include <SoftwareSerial.h>
 
 // Hardware Configuration
 LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
@@ -14,7 +14,9 @@ const int greenPin = 10;
 const int bluePin = 6;
 
 // ESP8266 Communication
-SoftwareSerial esp8266(13, 14); // RX, TX
+//SoftwareSerial esp8266(13, 14); // RX, TX
+#define esp8266 Serial1  // Use Serial1 for ESP8266 (TX1=18, RX1=19)
+
 
 // Game System
 enum GameState { MENU, PLAYING, PAUSED, GAME_OVER };

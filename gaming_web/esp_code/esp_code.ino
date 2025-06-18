@@ -246,7 +246,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
     case WStype_CONNECTED: {
       IPAddress ip = webSocket.remoteIP(num);
       Serial.printf("WebSocket [%u] Connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
-      
       // Send initial data
       broadcastGameData();
       break;
@@ -255,20 +254,27 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
     case WStype_TEXT: {
       String message = String((char*)payload);
       Serial.println("WebSocket message: " + message);
-      
       DynamicJsonDocument doc(512);
       deserializeJson(doc, message);
-      
       if (doc["type"] == "LED_CONTROL") {
         handleLEDControl(doc);
+        // Forward LED command to Arduino
+        String ledCommand = "LED:";
+        ledCommand += String(gameData.ledR) + ",";
+        ledCommand += String(gameData.ledG) + ",";
+        ledCommand += String(gameData.ledB) + ",";
+        ledCommand += String(gameData.ledBrightness) + ",";
+        ledCommand += gameData.ledMode + ",";
+        ledCommand += String(gameData.ledOn ? 1 : 0) + ",";
+        ledCommand += String(gameData.ledGameSync ? 1 : 0);
+        Serial1.println(ledCommand); // Forward to Arduino
       } else if (doc["type"] == "CONTROL") {
         String action = doc["action"];
-        Serial.print("CONTROL:");
-        Serial.println(action);
+        String ctrlCommand = "CONTROL:" + action;
+        Serial1.println(ctrlCommand); // Forward to Arduino
       }
       break;
     }
-    
     default:
       break;
   }
