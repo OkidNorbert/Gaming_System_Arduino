@@ -3,6 +3,10 @@
 #include <WebSocketsServer.h>
 #include <ArduinoJson.h>
 #include <FS.h>
+#include <BearSSLHelpers.h>
+#include <Hash.h>
+#include <vector>
+#include <map>
 
 // WiFi Configuration - CHANGE THESE TO YOUR NETWORK
 const char* ssid = "okidi6";
@@ -48,6 +52,15 @@ struct HighScore {
 HighScore highScores[20];
 int highScoreCount = 0;
 
+// User struct
+struct User {
+  String username;
+  String passwordHash;
+};
+
+std::vector<User> users;
+std::map<String, String> sessions; // token -> username
+
 // Timing variables
 unsigned long lastArduinoData = 0;
 unsigned long lastBroadcast = 0;
@@ -89,6 +102,7 @@ void setup() {
   Serial.println("WebSocket server started on port 81");
   
   loadHighScores();
+  loadUsers();
 }
 
 void loop() {
@@ -149,6 +163,8 @@ void setupWebServer() {
   server.on("/api/gamedata", HTTP_GET, handleGameData);
   server.on("/api/highscores", HTTP_GET, handleHighScores);
   server.on("/api/control", HTTP_POST, handleControl);
+  server.on("/api/register", HTTP_POST, handleRegister);
+  server.on("/api/login", HTTP_POST, handleLogin);
   
   // Enable CORS for all routes
   server.enableCORS(true);
@@ -470,4 +486,126 @@ void saveHighScores() {
     file.close();
     Serial.println("High scores saved to SPIFFS");
   }
+}
+
+// Helper: SHA256 hash using BearSSL
+String sha256(const String& input) {
+  br_sha256_context ctx;
+  br_sha256_init(&ctx);
+  br_sha256_update(&ctx, (const unsigned char*)input.c_str(), input.length());
+  unsigned char hash[32];
+  br_sha256_out(&ctx, hash);
+  String hex = "";
+  for (int i = 0; i < 32; i++) {
+    if (hash[i] < 16) hex += "0";
+    hex += String(hash[i], HEX);
+  }
+  return hex;
+}
+
+// Helper: Generate random token
+String generateToken() {
+  String token = "";
+  for (int i = 0; i < 32; i++) token += String(random(0, 16), HEX);
+  return token;
+}
+
+// Load users from SPIFFS
+void loadUsers() {
+  users.clear();
+  File file = SPIFFS.open("/users.json", "r");
+  if (file) {
+    DynamicJsonDocument doc(2048);
+    deserializeJson(doc, file);
+    JsonArray arr = doc["users"].as<JsonArray>();
+    for (JsonObject u : arr) {
+      User user;
+      user.username = u["username"].as<String>();
+      user.passwordHash = u["passwordHash"].as<String>();
+      users.push_back(user);
+    }
+    file.close();
+  }
+}
+
+// Save users to SPIFFS
+void saveUsers() {
+  DynamicJsonDocument doc(2048);
+  JsonArray arr = doc.createNestedArray("users");
+  for (User& u : users) {
+    JsonObject obj = arr.createNestedObject();
+    obj["username"] = u.username;
+    obj["passwordHash"] = u.passwordHash;
+  }
+  File file = SPIFFS.open("/users.json", "w");
+  if (file) {
+    serializeJson(doc, file);
+    file.close();
+  }
+}
+
+// Find user by username
+User* findUser(const String& username) {
+  for (auto& u : users) {
+    if (u.username == username) return &u;
+  }
+  return nullptr;
+}
+
+// API: Register
+void handleRegister() {
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"error\":\"No data\"}");
+    return;
+  }
+  DynamicJsonDocument doc(256);
+  deserializeJson(doc, server.arg("plain"));
+  String username = doc["username"];
+  String password = doc["password"];
+  if (username.length() < 3 || password.length() < 4) {
+    server.send(400, "application/json", "{\"error\":\"Username or password too short\"}");
+    return;
+  }
+  if (findUser(username)) {
+    server.send(409, "application/json", "{\"error\":\"User exists\"}");
+    return;
+  }
+  User user;
+  user.username = username;
+  user.passwordHash = sha256(password);
+  users.push_back(user);
+  saveUsers();
+  server.send(200, "application/json", "{\"status\":\"registered\"}");
+}
+
+// API: Login
+void handleLogin() {
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"error\":\"No data\"}");
+    return;
+  }
+  DynamicJsonDocument doc(256);
+  deserializeJson(doc, server.arg("plain"));
+  String username = doc["username"];
+  String password = doc["password"];
+  User* user = findUser(username);
+  if (!user || user->passwordHash != sha256(password)) {
+    server.send(401, "application/json", "{\"error\":\"Invalid credentials\"}");
+    return;
+  }
+  String token = generateToken();
+  sessions[token] = username;
+  DynamicJsonDocument resp(128);
+  resp["token"] = token;
+  String out;
+  serializeJson(resp, out);
+  server.send(200, "application/json", out);
+}
+
+// Helper: Validate token
+String validateToken() {
+  if (!server.hasHeader("Authorization")) return "";
+  String token = server.header("Authorization");
+  if (sessions.count(token)) return sessions[token];
+  return "";
 }

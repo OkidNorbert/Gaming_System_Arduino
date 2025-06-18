@@ -23,6 +23,8 @@ class GameDashboard {
     this.highScores = []
     this.ledController = new LEDController()
 
+    this.sessionToken = localStorage.getItem('sessionToken') || null
+    this.username = localStorage.getItem('username') || null
     this.init()
   }
 
@@ -32,8 +34,72 @@ class GameDashboard {
     this.initializeWebSocket()
     this.checkConnection()
     this.updateConnectionStatus(false)
-
+    this.setupAuth()
     console.log("Arduino Gaming Dashboard initialized")
+  }
+
+  setupAuth() {
+    const authModal = document.getElementById('authModal')
+    const closeBtn = document.getElementById('closeAuthModal')
+    const authForm = document.getElementById('authForm')
+    const authTitle = document.getElementById('authTitle')
+    const authError = document.getElementById('authError')
+    const showRegister = document.getElementById('showRegister')
+    let isRegister = false
+    // Show login/register modal if not logged in
+    if (!this.sessionToken) authModal.style.display = 'block'
+    closeBtn.onclick = () => { authModal.style.display = 'none' }
+    showRegister.onclick = (e) => {
+      e.preventDefault()
+      isRegister = !isRegister
+      if (isRegister) {
+        authTitle.textContent = 'Register'
+        document.getElementById('authSubmitBtn').textContent = 'Register'
+        showRegister.textContent = 'Already have an account? Login'
+      } else {
+        authTitle.textContent = 'Login'
+        document.getElementById('authSubmitBtn').textContent = 'Login'
+        showRegister.textContent = "Don't have an account? Register"
+      }
+      authError.textContent = ''
+    }
+    authForm.onsubmit = async (e) => {
+      e.preventDefault()
+      const username = document.getElementById('authUsername').value.trim()
+      const password = document.getElementById('authPassword').value
+      authError.textContent = ''
+      try {
+        if (isRegister) {
+          const resp = await fetch('/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+          })
+          if (!resp.ok) throw new Error((await resp.json()).error || 'Registration failed')
+          isRegister = false
+          authTitle.textContent = 'Login'
+          document.getElementById('authSubmitBtn').textContent = 'Login'
+          showRegister.textContent = "Don't have an account? Register"
+          authError.textContent = 'Registration successful. Please login.'
+        } else {
+          const resp = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+          })
+          if (!resp.ok) throw new Error((await resp.json()).error || 'Login failed')
+          const data = await resp.json()
+          this.sessionToken = data.token
+          this.username = username
+          localStorage.setItem('sessionToken', data.token)
+          localStorage.setItem('username', username)
+          authModal.style.display = 'none'
+          this.playSound('connect')
+        }
+      } catch (err) {
+        authError.textContent = err.message
+      }
+    }
   }
 
   setupEventListeners() {
@@ -199,7 +265,9 @@ class GameDashboard {
 
   async fetchHighScores() {
     try {
-      const response = await fetch("/api/highscores")
+      const response = await fetch("/api/highscores", {
+        headers: this.sessionToken ? { 'Authorization': this.sessionToken } : {}
+      })
       if (response.ok) {
         const data = await response.json()
         this.highScores = data.scores || []
@@ -271,7 +339,10 @@ class GameDashboard {
     try {
       const response = await fetch("/api/control", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(this.sessionToken ? { 'Authorization': this.sessionToken } : {})
+        },
         body: JSON.stringify({ action }),
       })
 
@@ -504,3 +575,10 @@ function refreshHighScores() {
 document.addEventListener("DOMContentLoaded", () => {
   dashboard = new GameDashboard()
 })
+
+// Add logout button (optional)
+window.logout = function() {
+  localStorage.removeItem('sessionToken')
+  localStorage.removeItem('username')
+  location.reload()
+}
