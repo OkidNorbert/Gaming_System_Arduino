@@ -494,6 +494,36 @@ body {
   background: rgba(108, 99, 255, 0.1);
 }
 
+/* Refresh Button */
+.refresh-btn {
+  background: var(--gradient-primary);
+  border: none;
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 12px 2px var(--primary-color);
+  color: var(--text-primary);
+  font-size: 1.4em;
+  margin-left: 12px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
+  outline: none;
+  position: relative;
+}
+.refresh-btn:hover, .refresh-btn:focus {
+  background: var(--gradient-secondary);
+  color: var(--accent-color);
+  transform: rotate(90deg) scale(1.1);
+  box-shadow: 0 0 18px 4px var(--accent-color);
+}
+.refresh-btn i {
+  pointer-events: none;
+  transition: color 0.2s;
+}
+
 /* User Controls */
 #userControls {
   display: flex;
