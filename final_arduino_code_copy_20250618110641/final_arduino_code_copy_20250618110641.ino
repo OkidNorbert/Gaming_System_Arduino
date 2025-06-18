@@ -36,6 +36,8 @@ struct InputState {
   unsigned long lastButtonTime = 0;
   unsigned long lastJoyTime = 0;
   unsigned long lastMenuChange = 0;
+  // Web control flags
+  bool webJoyLeft = false, webJoyRight = false, webJoyUp = false, webJoyDown = false, webButtonPressed = false;
 };
 
 InputState input;
@@ -155,7 +157,7 @@ void loop() {
     sendGameDataToESP();
     lastDataSend = millis();
   }
-  
+  // Remove the reset of web control flags here (now handled after use)
   delay(50);
 }
 
@@ -246,6 +248,12 @@ void updateInput() {
       input.lastJoyTime = currentTime;
     }
   }
+  // Merge web controls with physical controls
+  input.joyLeft  = input.joyLeft  || input.webJoyLeft;
+  input.joyRight = input.joyRight || input.webJoyRight;
+  input.joyUp    = input.joyUp    || input.webJoyUp;
+  input.joyDown  = input.joyDown  || input.webJoyDown;
+  input.buttonPressed = input.buttonPressed || input.webButtonPressed;
 }
 
 void handleESP8266Communication() {
@@ -270,12 +278,11 @@ void handleESP8266Communication() {
 
 void handleRemoteControl(String action) {
   Serial.println("Remote control: " + action);
-  
-  if (action == "up") input.joyUp = true;
-  else if (action == "down") input.joyDown = true;
-  else if (action == "left") input.joyLeft = true;
-  else if (action == "right") input.joyRight = true;
-  else if (action == "fire") input.buttonPressed = true;
+  if (action == "up") input.webJoyUp = true;
+  else if (action == "down") input.webJoyDown = true;
+  else if (action == "left") input.webJoyLeft = true;
+  else if (action == "right") input.webJoyRight = true;
+  else if (action == "fire") input.webButtonPressed = true;
   else if (action == "menu") {
     currentState = MENU;
     showMenu();
@@ -487,7 +494,6 @@ int freeMemory() {
 void handleMenu() {
   unsigned long currentTime = millis();
   static GameType lastSelected = (GameType)-1;
-  
   // Prevent rapid menu changes
   if(currentTime - input.lastMenuChange > 300) {
     if(input.joyUp) {
@@ -496,6 +502,7 @@ void handleMenu() {
       input.lastMenuChange = currentTime;
       Serial.print("Menu UP - Selected: ");
       Serial.println(selectedGame);
+      input.webJoyUp = false; // Reset web flag after use
     }
     else if(input.joyDown) {
       selectedGame = (GameType)((selectedGame + 1) % totalGames);
@@ -503,18 +510,18 @@ void handleMenu() {
       input.lastMenuChange = currentTime;
       Serial.print("Menu DOWN - Selected: ");
       Serial.println(selectedGame);
+      input.webJoyDown = false; // Reset web flag after use
     }
   }
-  
   // Update display only when selection changes
   if(selectedGame != lastSelected) {
     showMenu();
     lastSelected = selectedGame;
   }
-  
   if(input.buttonPressed) {
     startGame();
     input.buttonPressed = false;
+    input.webButtonPressed = false; // Reset web flag after use
   }
 }
 
@@ -756,10 +763,10 @@ bool isSnakePosition(int x, int y) {
 void playSnake() {
   unsigned long currentTime = millis();
   
-  if(input.joyLeft && snakeDirX != 1) { snakeDirX = -1; snakeDirY = 0; }
-  if(input.joyRight && snakeDirX != -1) { snakeDirX = 1; snakeDirY = 0; }
-  if(input.joyUp && snakeDirY != 1) { snakeDirX = 0; snakeDirY = -1; }
-  if(input.joyDown && snakeDirY != -1) { snakeDirX = 0; snakeDirY = 1; }
+  if(input.joyLeft && snakeDirX != 1) { snakeDirX = -1; snakeDirY = 0; input.webJoyLeft = false; }
+  if(input.joyRight && snakeDirX != -1) { snakeDirX = 1; snakeDirY = 0; input.webJoyRight = false; }
+  if(input.joyUp && snakeDirY != 1) { snakeDirX = 0; snakeDirY = -1; input.webJoyUp = false; }
+  if(input.joyDown && snakeDirY != -1) { snakeDirX = 0; snakeDirY = 1; input.webJoyDown = false; }
   
   if(currentTime - lastGameUpdate > 500) {
     lastGameUpdate = currentTime;
@@ -824,8 +831,8 @@ void playPong() {
   if(currentTime - lastGameUpdate > 200) {
     lastGameUpdate = currentTime;
     
-    if(input.joyUp && paddleY > 0) paddleY = 0;
-    if(input.joyDown && paddleY < 1) paddleY = 1;
+    if(input.joyUp && paddleY > 0) { paddleY = 0; input.webJoyUp = false; }
+    if(input.joyDown && paddleY < 1) { paddleY = 1; input.webJoyDown = false; }
     
     ballX += ballVelX;
     ballY += ballVelY;
