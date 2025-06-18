@@ -5,8 +5,8 @@
 #include <FS.h>
 
 // WiFi Configuration - CHANGE THESE TO YOUR NETWORK
-const char* ssid = "Norbort";
-const char* password = "@N0rb0rt";
+const char* ssid = "okidi6";
+const char* password = "warrior30";
 
 // Web Server and WebSocket
 ESP8266WebServer server(80);
@@ -19,7 +19,7 @@ struct GameData {
   int flappyScore = 0;
   int flappyHigh = 0;
   int snakeScore = 0;
-  int snakeHigh = 0;
+  int snakeHigh = 0;  // Added missing member
   int snakeLength = 2;
   int pongScore = 0;
   int pongHigh = 0;
@@ -58,26 +58,16 @@ void setup() {
   // Initialize SPIFFS for file system
   if (!SPIFFS.begin()) {
     Serial.println("SPIFFS initialization failed!");
-    Serial.println("Make sure you've uploaded the data files using 'ESP8266 Sketch Data Upload'");
     return;
   }
-  Serial.println("SPIFFS initialized successfully");
   
   // Connect to WiFi
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
   
-  int wifiAttempts = 0;
-  while (WiFi.status() != WL_CONNECTED && wifiAttempts < 30) {
+  while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
-    wifiAttempts++;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nFailed to connect to WiFi!");
-    Serial.println("Please check your credentials and try again.");
-    return;
   }
   
   Serial.println();
@@ -111,16 +101,6 @@ void loop() {
   // Update system data
   updateSystemData();
   
-  // WiFi reconnection check
-  static unsigned long lastWiFiCheck = 0;
-  if (millis() - lastWiFiCheck > 30000) { // Check every 30 seconds
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("WiFi disconnected, reconnecting...");
-      WiFi.begin(ssid, password);
-    }
-    lastWiFiCheck = millis();
-  }
-  
   // Send periodic updates to connected clients
   if (millis() - lastBroadcast > 1000) {
     broadcastGameData();
@@ -131,36 +111,36 @@ void loop() {
 }
 
 void setupWebServer() {
-  // Serve the main HTML file from SPIFFS
+  // Serve the main HTML file
   server.on("/", HTTP_GET, []() {
     File file = SPIFFS.open("/index.html", "r");
     if (file) {
       server.streamFile(file, "text/html");
       file.close();
     } else {
-      server.send(404, "text/plain", "index.html not found. Please upload web files to SPIFFS using 'Tools > ESP8266 Sketch Data Upload'");
+      server.send(404, "text/plain", "File not found. Please upload web files to SPIFFS.");
     }
   });
   
-  // Serve CSS file from SPIFFS
+  // Serve CSS file
   server.on("/styles.css", HTTP_GET, []() {
     File file = SPIFFS.open("/styles.css", "r");
     if (file) {
       server.streamFile(file, "text/css");
       file.close();
     } else {
-      server.send(404, "text/plain", "styles.css not found");
+      server.send(404, "text/plain", "CSS file not found");
     }
   });
   
-  // Serve JavaScript file from SPIFFS
+  // Serve JavaScript file
   server.on("/app.js", HTTP_GET, []() {
     File file = SPIFFS.open("/app.js", "r");
     if (file) {
       server.streamFile(file, "application/javascript");
       file.close();
     } else {
-      server.send(404, "text/plain", "app.js not found");
+      server.send(404, "text/plain", "JS file not found");
     }
   });
   
@@ -175,9 +155,7 @@ void setupWebServer() {
   
   // Handle file not found
   server.onNotFound([]() {
-    String path = server.uri();
-    Serial.println("File not found: " + path);
-    server.send(404, "text/plain", "File not found: " + path);
+    server.send(404, "text/plain", "File not found");
   });
 }
 
@@ -306,7 +284,7 @@ void handleLEDControl(DynamicJsonDocument& doc) {
   gameData.ledOn = doc["isOn"];
   gameData.ledGameSync = doc["gameSync"];
   
-  // Send LED command to Arduino
+  // Send LED command to Arduino - Fixed string concatenation
   String ledCommand = "LED:";
   ledCommand += String(gameData.ledR) + ",";
   ledCommand += String(gameData.ledG) + ",";
@@ -373,31 +351,8 @@ void parseGameData(String data) {
     
     // Update high scores
     gameData.flappyHigh = values[3].toInt();
-    gameData.snakeHigh = values[4].toInt();
+    gameData.snakeHigh = values[4].toInt();  // Fixed: now uses snakeHigh
     gameData.pongHigh = values[5].toInt();
-    
-    // Check for new high scores and save them
-    if (currentScore > 0) {
-      bool isNewHigh = false;
-      String gameName = values[0];
-      
-      if (gameName == "flappy" && currentScore > gameData.flappyHigh) {
-        gameData.flappyHigh = currentScore;
-        isNewHigh = true;
-      } else if (gameName == "snake" && currentScore > gameData.snakeHigh) {
-        gameData.snakeHigh = currentScore;
-        isNewHigh = true;
-      } else if (gameName == "pong" && currentScore > gameData.pongHigh) {
-        gameData.pongHigh = currentScore;
-        isNewHigh = true;
-      }
-      
-      if (isNewHigh) {
-        addHighScore("Player", gameName, currentScore);
-        saveHighScores();
-        Serial.println("New high score: " + gameName + " - " + String(currentScore));
-      }
-    }
     
     if (valueIndex >= 7) gameData.snakeLength = values[6].toInt();
     if (valueIndex >= 8) gameData.uptime = values[7].toInt();
@@ -421,12 +376,6 @@ void updateSystemData() {
 }
 
 void broadcastGameData() {
-  // Check memory before broadcasting
-  if (ESP.getFreeHeap() < 8000) {
-    Serial.println("Warning: Low memory - " + String(ESP.getFreeHeap()) + " bytes free");
-    return;
-  }
-  
   DynamicJsonDocument doc(1024);
   doc["type"] = "gameData";
   
@@ -479,7 +428,7 @@ void loadHighScores() {
     }
     
     file.close();
-    Serial.println("High scores loaded from SPIFFS (" + String(highScoreCount) + " scores)");
+    Serial.println("High scores loaded from SPIFFS");
   } else {
     // Create some default high scores
     addHighScore("Player1", "Flappy Bird", 15);
@@ -490,27 +439,10 @@ void loadHighScores() {
 }
 
 void addHighScore(String player, String game, int score) {
-  // Find the right spot to insert the new high score (sorted by score)
-  int insertIndex = highScoreCount;
-  
-  for (int i = 0; i < highScoreCount; i++) {
-    if (score > highScores[i].score) {
-      insertIndex = i;
-      break;
-    }
-  }
-  
-  // Shift existing scores down to make room
-  for (int i = min(highScoreCount, 19); i > insertIndex; i--) {
-    highScores[i] = highScores[i - 1];
-  }
-  
-  // Insert the new score
-  highScores[insertIndex].player = player;
-  highScores[insertIndex].game = game;
-  highScores[insertIndex].score = score;
-  
   if (highScoreCount < 20) {
+    highScores[highScoreCount].player = player;
+    highScores[highScoreCount].game = game;
+    highScores[highScoreCount].score = score;
     highScoreCount++;
   }
 }
@@ -531,7 +463,5 @@ void saveHighScores() {
     serializeJson(doc, file);
     file.close();
     Serial.println("High scores saved to SPIFFS");
-  } else {
-    Serial.println("Failed to save high scores");
   }
 }
